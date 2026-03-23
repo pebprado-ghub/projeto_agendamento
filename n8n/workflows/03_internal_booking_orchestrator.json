@@ -1,0 +1,484 @@
+{
+  "name": "03_internal_booking_orchestrator",
+  "nodes": [
+    {
+      "id": "Webhook_Inbound",
+      "name": "webhook_inbound_internal",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "parameters": {
+        "path": "booking/internal/inbound",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "Set_Normalize",
+      "name": "set_normalize_input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "app_base_url",
+              "value": "={{$json.body?.app_base_url || 'http://localhost:3000'}}",
+              "type": "string"
+            },
+            {
+              "name": "internal_secret",
+              "value": "={{$json.body?.internal_secret || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "business_id",
+              "value": "={{$json.body?.business_id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_phone",
+              "value": "={{$json.body?.customer_phone || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_text",
+              "value": "={{($json.body?.customer_text || '').toString().trim()}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_interactive_id",
+              "value": "={{($json.body?.customer_interactive_id || '').toString().trim()}}",
+              "type": "string"
+            },
+            {
+              "name": "whatsapp_profile_name",
+              "value": "={{($json.body?.whatsapp_profile_name || '').toString().trim()}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Http_Get_State",
+      "name": "http_get_conversation_state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 210],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$json.app_base_url + '/api/conversation-state?businessId=' + $json.business_id + '&customerPhone=' + $json.customer_phone}}"
+      }
+    },
+    {
+      "id": "Http_Get_Services",
+      "name": "http_get_services",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 390],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$node['set_normalize_input'].json.app_base_url + '/api/services?businessId=' + $node['set_normalize_input'].json.business_id}}"
+      }
+    },
+    {
+      "id": "Http_Get_Templates",
+      "name": "http_get_message_templates",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [700, 480],
+      "parameters": {
+        "method": "GET",
+        "url": "={{$node['set_normalize_input'].json.app_base_url + '/api/message-templates?businessId=' + $node['set_normalize_input'].json.business_id}}"
+      }
+    },
+    {
+      "id": "Code_Router",
+      "name": "code_route_step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = $node['set_normalize_input'].json;\nconst stateResp = $node['http_get_conversation_state'].json?.data || null;\nconst servicesResp = $node['http_get_services'].json?.data || [];\nconst templatesResp = $node['http_get_message_templates'].json?.data || [];\n\nconst text = (input.customer_text || '').toLowerCase().trim();\nconst interactiveId = (input.customer_interactive_id || '').toLowerCase().trim();\nconst userSelection = interactiveId || text;\nconst currentState = stateResp?.state || 'start';\nconst context = { ...(stateResp?.context || {}) };\nconst waProfile = (input.whatsapp_profile_name || '').trim();\nif (waProfile) context.customer_name = waProfile;\n\nconst templates = new Map((templatesResp || []).map((t) => [String(t.code || '').toUpperCase(), String(t.content || '')]));\nconst serviceMenuPrompt = templates.get('WA_SERVICE_MENU_PROMPT') || 'Escolha um servico:';\nconst serviceOptionTitleTemplate = templates.get('WA_SERVICE_OPTION_TITLE_TEMPLATE') || '{{servico}}';\nconst serviceOptionDescriptionTemplate = templates.get('WA_SERVICE_OPTION_DESCRIPTION_TEMPLATE') || '{{duracao}} min';\n\nconst services = servicesResp.filter((s) => s.is_active);\nconst serviceOptions = services.slice(0, 10).map((s, idx) => ({\n  id: `svc_${idx + 1}`,\n  title: serviceOptionTitleTemplate.replaceAll('{{servico}}', s.name).slice(0, 24),\n  description: serviceOptionDescriptionTemplate.replaceAll('{{duracao}}', String(s.duration_minutes)).slice(0, 72),\n  service_id: s.id\n}));\n\nlet action = 'menu';\nlet responseText = serviceMenuPrompt;\nlet nextState = 'awaiting_service';\nlet nextContext = context;\nlet responseOptions = [];\n\nif (!services.length) {\n  action = 'fallback';\n  responseText = 'Ainda nao ha servicos ativos para este negocio.';\n  nextState = 'start';\n  nextContext = waProfile ? { customer_name: waProfile } : {};\n} else if (currentState === 'awaiting_service') {\n  responseOptions = serviceOptions;\n  const pickedByNumber = Number(text);\n  let selected = Number.isFinite(pickedByNumber) ? services[pickedByNumber - 1] : null;\n\n  if (!selected && userSelection.startsWith('svc_')) {\n    const idx = Number(userSelection.replace('svc_', ''));\n    if (Number.isFinite(idx) && idx > 0 && idx <= services.length) {\n      selected = services[idx - 1];\n    }\n  }\n\n  if (!selected && userSelection) {\n    selected = services.find((s) => s.id === userSelection) || null;\n  }\n\n  if (selected) {\n    action = 'ask_date';\n    responseText = `Perfeito! Envie a data no formato AAAA-MM-DD para ${selected.name}.`;\n    nextState = 'awaiting_date';\n    nextContext = { ...context, service_id: selected.id, service_name: selected.name };\n    responseOptions = [];\n  }\n} else if (currentState === 'awaiting_date') {\n  const dateOk = /^\\d{4}-\\d{2}-\\d{2}$/.test(text);\n  if (dateOk) {\n    action = 'check_availability';\n    responseText = 'Consultando horarios, um momento...';\n    nextState = 'awaiting_slot';\n    nextContext = { ...context, requested_date: text };\n  } else {\n    action = 'ask_date';\n    responseText = 'Data invalida. Use AAAA-MM-DD.';\n    nextState = 'awaiting_date';\n  }\n} else if (currentState === 'awaiting_slot') {\n  action = 'create_appointment';\n  responseText = 'Confirmando agendamento...';\n  nextState = 'start';\n  nextContext = { ...context, selected_slot_input: userSelection || text };\n} else {\n  action = 'menu';\n  responseText = serviceMenuPrompt;\n  nextState = 'awaiting_service';\n  nextContext = waProfile ? { customer_name: waProfile } : {};\n  responseOptions = serviceOptions;\n}\n\nreturn [{ json: { ...input, current_state: currentState, context, services, ui_templates: { slot_menu_prompt: templates.get('WA_SLOT_MENU_PROMPT') || 'Horarios disponiveis. Escolha um horario:', slot_option_title_template: templates.get('WA_SLOT_OPTION_TITLE_TEMPLATE') || '{{hora}}', slot_option_description_template: templates.get('WA_SLOT_OPTION_DESCRIPTION_TEMPLATE') || '{{data}}' }, action, response_text: responseText, response_options: responseOptions, next_state: nextState, next_context: nextContext } }];"
+      }
+    },
+    {
+      "id": "Switch_Action",
+      "name": "switch_action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1210, 300],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "check_availability",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{$json.action}}",
+                    "rightValue": "create_appointment",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Http_Availability",
+      "name": "http_check_availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1460, 180],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.app_base_url + '/api/availability'}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-internal-secret",
+              "value": "={{$json.internal_secret}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"businessId\":\"{{$json.business_id}}\",\"serviceId\":\"{{$json.next_context.service_id}}\",\"date\":\"{{$json.next_context.requested_date}}\"}"
+      }
+    },
+    {
+      "id": "Code_Format_Availability",
+      "name": "code_format_availability_response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1710, 180],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const root = $node['code_route_step'].json;\nconst avail = $node['http_check_availability'].json || {};\nconst slots = (avail.availableSlots || []).slice(0, 8);\nconst slotPrompt = root.ui_templates?.slot_menu_prompt || 'Horarios disponiveis. Escolha um horario:';\nconst slotTitleTemplate = root.ui_templates?.slot_option_title_template || '{{hora}}';\nconst slotDescriptionTemplate = root.ui_templates?.slot_option_description_template || '{{data}}';\n\nlet responseText = 'Nao encontrei horarios para esta data. Envie outra data (AAAA-MM-DD).';\nlet nextState = 'awaiting_date';\nlet nextContext = { ...root.next_context };\nlet responseOptions = [];\n\nif (slots.length) {\n  responseText = slotPrompt;\n  responseOptions = slots.map((slot, idx) => {\n    const hhmm = slot.slice(11, 16);\n    const date = slot.slice(0, 10);\n    return {\n      id: `slot_${idx + 1}`,\n      title: slotTitleTemplate.replaceAll('{{hora}}', hhmm).slice(0, 24),\n      description: slotDescriptionTemplate.replaceAll('{{data}}', date).replaceAll('{{hora}}', hhmm).slice(0, 72),\n      slot\n    };\n  });\n  nextState = 'awaiting_slot';\n  nextContext = { ...root.next_context, available_slots: slots };\n}\n\nreturn [{ json: { ...root, response_text: responseText, response_options: responseOptions, next_state: nextState, next_context: nextContext } }];"
+      }
+    },
+    {
+      "id": "Code_Create_Payload",
+      "name": "code_prepare_appointment_payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1460, 390],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const root = $node['code_route_step'].json;\nconst selected = (root.next_context?.selected_slot_input || '').trim().toLowerCase();\nconst slots = root.context?.available_slots || [];\n\nlet pickedSlot = '';\nif (selected.startsWith('slot_')) {\n  const idx = Number(selected.replace('slot_', ''));\n  if (Number.isFinite(idx) && idx > 0 && idx <= slots.length) {\n    pickedSlot = slots[idx - 1];\n  }\n}\n\nif (!pickedSlot) {\n  const byIndex = Number(selected);\n  if (Number.isFinite(byIndex) && byIndex > 0 && byIndex <= slots.length) {\n    pickedSlot = slots[byIndex - 1];\n  } else {\n    const normalized = selected.length === 5 ? `${root.context?.requested_date}T${selected}:00` : selected;\n    pickedSlot = slots.find((s) => s.startsWith(normalized.slice(0, 16))) || normalized;\n  }\n}\n\nif (!pickedSlot || !/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}/.test(pickedSlot)) {\n  return [{ json: { ...root, appointment_error: 'Horario invalido. Escolha uma opcao de horario.', response_text: 'Horario invalido. Escolha uma opcao de horario.', next_state: 'awaiting_slot', next_context: root.context } }];\n}\n\nconst service = root.services.find((s) => s.id === root.context?.service_id);\nconst duration = service?.duration_minutes || 30;\nconst start = new Date(pickedSlot);\nconst end = new Date(start.getTime() + duration * 60000);\n\nreturn [{ json: { ...root, appointment_error: '', picked_slot: pickedSlot, appointment_payload: { businessId: root.business_id, serviceId: root.context?.service_id || null, customerPhone: root.customer_phone, customerName: root.context?.customer_name || root.customer_display_name || null, startsAt: start.toISOString(), endsAt: end.toISOString(), notes: 'Criado via n8n inbound' } } }];"
+      }
+    },
+    {
+      "id": "If_Payload_Valid",
+      "name": "if_payload_valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1710, 390],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.appointment_error}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "Http_Create_Appointment",
+      "name": "http_create_appointment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 320],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.app_base_url + '/api/appointments'}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json.appointment_payload}}"
+      }
+    },
+    {
+      "id": "Code_Confirm_Appointment",
+      "name": "code_confirm_appointment_response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2210, 320],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const root = $node['code_prepare_appointment_payload'].json;\nconst created = $node['http_create_appointment'].json?.data;\n\nconst hhmm = (root.picked_slot || '').slice(11, 16);\nconst date = (root.picked_slot || '').slice(0, 10);\nconst serviceName = root.context?.service_name || 'servico';\n\nreturn [{ json: { ...root, response_text: `Agendamento confirmado para ${date} as ${hhmm} (${serviceName}).`, next_state: 'start', next_context: {} } }];"
+      }
+    },
+    {
+      "id": "Http_Save_State",
+      "name": "http_save_conversation_state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2480, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.app_base_url + '/api/conversation-state'}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"businessId\":\"{{$json.business_id}}\",\"customerPhone\":\"{{$json.customer_phone}}\",\"state\":\"{{$json.next_state}}\",\"context\":{{$json.next_context}}}"
+      }
+    },
+    {
+      "id": "Respond_Webhook",
+      "name": "respond_inbound_result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2720, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"customer_phone\":\"{{$json.customer_phone}}\",\"next_state\":\"{{$json.next_state}}\",\"message\":\"{{$json.response_text}}\",\"options\":{{$json.response_options || []}}}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook_inbound_internal": {
+      "main": [
+        [
+          {
+            "node": "set_normalize_input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set_normalize_input": {
+      "main": [
+        [
+          {
+            "node": "http_get_conversation_state",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "http_get_services",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "http_get_message_templates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_get_conversation_state": {
+      "main": [
+        [
+          {
+            "node": "code_route_step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_get_services": {
+      "main": [
+        [
+          {
+            "node": "code_route_step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_get_message_templates": {
+      "main": [
+        [
+          {
+            "node": "code_route_step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_route_step": {
+      "main": [
+        [
+          {
+            "node": "switch_action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "switch_action": {
+      "main": [
+        [
+          {
+            "node": "http_check_availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "code_prepare_appointment_payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "http_save_conversation_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_check_availability": {
+      "main": [
+        [
+          {
+            "node": "code_format_availability_response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_format_availability_response": {
+      "main": [
+        [
+          {
+            "node": "http_save_conversation_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_prepare_appointment_payload": {
+      "main": [
+        [
+          {
+            "node": "if_payload_valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if_payload_valid": {
+      "main": [
+        [
+          {
+            "node": "http_create_appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "http_save_conversation_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_create_appointment": {
+      "main": [
+        [
+          {
+            "node": "code_confirm_appointment_response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_confirm_appointment_response": {
+      "main": [
+        [
+          {
+            "node": "http_save_conversation_state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_save_conversation_state": {
+      "main": [
+        [
+          {
+            "node": "respond_inbound_result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4"
+}

@@ -1,0 +1,95 @@
+{
+  "name": "01_whatsapp_inbound_router",
+  "nodes": [
+    {
+      "id": "Webhook_WhatsApp",
+      "name": "webhook_whatsapp_inbound",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 260],
+      "parameters": {
+        "path": "whatsapp/inbound",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "Set_Normalize",
+      "name": "set_normalize_payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [500, 260],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "message_id",
+              "value": "={{$json.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_phone",
+              "value": "={{$json.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_text",
+              "value": "={{$json.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "customer_interactive_id",
+              "value": "={{$json.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.button_reply?.id || $json.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.interactive?.list_reply?.id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "whatsapp_profile_name",
+              "value": "={{$json.body?.entry?.[0]?.changes?.[0]?.value?.contacts?.[0]?.profile?.name || ''}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Respond_OK",
+      "name": "respond_ok",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [760, 260],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"received\":true,\"message_id\":\"{{$json.message_id}}\",\"customer_phone\":\"{{$json.customer_phone}}\",\"customer_text\":\"{{$json.customer_text}}\",\"customer_interactive_id\":\"{{$json.customer_interactive_id}}\",\"whatsapp_profile_name\":\"{{$json.whatsapp_profile_name}}\"}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook_whatsapp_inbound": {
+      "main": [
+        [
+          {
+            "node": "set_normalize_payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set_normalize_payload": {
+      "main": [
+        [
+          {
+            "node": "respond_ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}

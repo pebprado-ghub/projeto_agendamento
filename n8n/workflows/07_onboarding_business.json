@@ -1,0 +1,198 @@
+{
+  "name": "07_onboarding_business",
+  "nodes": [
+    {
+      "id": "Webhook_Onboarding",
+      "name": "webhook_onboarding_business",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 260],
+      "parameters": {
+        "path": "onboarding/business",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "Set_Normalize",
+      "name": "set_normalize_event",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [470, 260],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "event",
+              "value": "={{$json.body?.event || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "business_id",
+              "value": "={{$json.body?.business?.id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "business_name",
+              "value": "={{$json.body?.business?.name || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "contact_phone",
+              "value": "={{$json.body?.business?.contact_phone || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "onboarding_secret",
+              "value": "={{$json.headers?.['x-onboarding-secret'] || ''}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Code_ValidateSecret",
+      "name": "code_validate_onboarding_secret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 260],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Opcao sem admin: MESMO valor de N8N_ONBOARDING_SECRET do .env.local do app.\n// Cuidado: exportar o workflow expoe este texto. Deixe '' para usar $vars / env.\nconst WORKFLOW_ONBOARDING_SECRET = '';\n\nconst j = $json;\nconst header = String(j.onboarding_secret || '').trim();\nlet expected = '';\nconst wf = String(WORKFLOW_ONBOARDING_SECRET || '').trim();\nif (wf !== '') {\n  expected = wf;\n} else if (typeof $vars !== 'undefined' && $vars) {\n  expected = String($vars.N8N_ONBOARDING_SECRET || $vars.ONBOARDING_SECRET || '').trim();\n}\nif (!expected) {\n  expected = String(process.env.N8N_ONBOARDING_SECRET || '').trim();\n}\nconst secret_valid = expected === '' || header === expected;\nreturn [{ json: { ...j, secret_valid } }];"
+      }
+    },
+    {
+      "id": "If_Secret",
+      "name": "if_secret_valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [850, 260],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.secret_valid}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "Code_Plan",
+      "name": "code_build_onboarding_plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 180],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const event = $json.event;\nconst businessName = $json.business_name || 'negocio';\nconst contactPhone = $json.contact_phone || '';\n\nconst tasks = [];\nif (event === 'business_created') {\n  tasks.push('Criar estado inicial de conversa');\n  tasks.push('Enviar mensagem de boas-vindas interna para equipe');\n  if (contactPhone) tasks.push('Agendar mensagem de onboarding no WhatsApp');\n} else if (event === 'business_updated') {\n  tasks.push('Validar dados atualizados do cadastro');\n  tasks.push('Recalcular configuracoes de atendimento');\n}\n\nreturn [{ json: { ...$json, tasks, summary: `Onboarding processado para ${businessName}` } }];"
+      }
+    },
+    {
+      "id": "Respond_Success",
+      "name": "respond_onboarding_success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1340, 180],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\":true,\"event\":\"{{$json.event}}\",\"business_id\":\"{{$json.business_id}}\",\"tasks\":{{$json.tasks}},\"summary\":\"{{$json.summary}}\"}"
+      }
+    },
+    {
+      "id": "Respond_Unauthorized",
+      "name": "respond_onboarding_unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 360],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 401,
+        "responseBody": "={\"ok\":false,\"error\":\"onboarding secret invalido\"}"
+      }
+    }
+  ],
+  "connections": {
+    "webhook_onboarding_business": {
+      "main": [
+        [
+          {
+            "node": "set_normalize_event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set_normalize_event": {
+      "main": [
+        [
+          {
+            "node": "code_validate_onboarding_secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_validate_onboarding_secret": {
+      "main": [
+        [
+          {
+            "node": "if_secret_valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "if_secret_valid": {
+      "main": [
+        [
+          {
+            "node": "code_build_onboarding_plan",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "respond_onboarding_unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "code_build_onboarding_plan": {
+      "main": [
+        [
+          {
+            "node": "respond_onboarding_success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3"
+}

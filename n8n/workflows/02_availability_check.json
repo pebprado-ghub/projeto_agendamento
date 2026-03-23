@@ -1,0 +1,136 @@
+{
+  "name": "02_availability_check",
+  "nodes": [
+    {
+      "id": "ExecuteWorkflowTrigger_Availability",
+      "name": "execute_workflow_trigger_availability",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 260],
+      "parameters": {}
+    },
+    {
+      "id": "Set_Defaults",
+      "name": "set_defaults",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [470, 260],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "business_id",
+              "value": "={{$json.business_id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "service_id",
+              "value": "={{$json.service_id || ''}}",
+              "type": "string"
+            },
+            {
+              "name": "date",
+              "value": "={{$json.date || $now.toISODate()}}",
+              "type": "string"
+            },
+            {
+              "name": "timezone",
+              "value": "={{$json.timezone || 'America/Sao_Paulo'}}",
+              "type": "string"
+            },
+            {
+              "name": "slot_duration_minutes",
+              "value": "={{$json.slot_duration_minutes || 30}}",
+              "type": "number"
+            },
+            {
+              "name": "app_base_url",
+              "value": "={{$json.app_base_url || 'http://localhost:3000'}}",
+              "type": "string"
+            },
+            {
+              "name": "internal_secret",
+              "value": "={{$json.internal_secret || ''}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Http_Availability",
+      "name": "http_get_availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [710, 260],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$json.app_base_url + '/api/availability'}}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"businessId\":\"{{$json.business_id}}\",\"serviceId\":\"{{$json.service_id}}\",\"date\":\"{{$json.date}}\",\"timezone\":\"{{$json.timezone}}\",\"slotDurationMinutes\":{{$json.slot_duration_minutes}}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-internal-secret",
+              "value": "={{$json.internal_secret}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "Return_Output",
+      "name": "return_output",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [940, 260],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "execute_workflow_trigger_availability": {
+      "main": [
+        [
+          {
+            "node": "set_defaults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set_defaults": {
+      "main": [
+        [
+          {
+            "node": "http_get_availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "http_get_availability": {
+      "main": [
+        [
+          {
+            "node": "return_output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}
