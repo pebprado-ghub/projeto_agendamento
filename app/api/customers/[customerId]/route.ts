@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { normalizePhoneDigits } from "@/lib/phone";
 
 const SELECT_FIELDS =
-  "id, business_id, full_name, whatsapp_profile_name, phone_normalized, email, document_id, birth_date, gender, address_line, address_number, address_complement, neighborhood, city, state, postal_code, notes, preferences, restrictions, tags, is_vip, is_blocked, block_reason, source, marketing_opt_in, created_at, updated_at";
+  "id, business_id, full_name, whatsapp_profile_name, phone_normalized, email, document_id, birth_date, gender, address_line, address_number, address_complement, neighborhood, city, state, postal_code, notes, preferences, restrictions, tags, is_vip, is_blocked, block_reason, source, marketing_opt_in, marketing_opt_in_at, created_at, updated_at";
 const SELECT_FIELDS_LEGACY =
   "id, business_id, full_name, phone_normalized, email, document_id, birth_date, gender, address_line, address_number, address_complement, neighborhood, city, state, postal_code, notes, source, marketing_opt_in, created_at, updated_at";
 
@@ -110,7 +110,8 @@ export async function GET(request: NextRequest, { params }: Params) {
           tags: [],
           is_vip: false,
           is_blocked: false,
-          block_reason: null
+          block_reason: null,
+          marketing_opt_in_at: null
         }
       });
     }
@@ -206,7 +207,9 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       patch.source = body.source;
     }
     if (body.marketingOptIn !== undefined) {
-      patch.marketing_opt_in = Boolean(body.marketingOptIn);
+      const v = Boolean(body.marketingOptIn);
+      patch.marketing_opt_in = v;
+      patch.marketing_opt_in_at = v ? new Date().toISOString() : null;
     }
 
     const { data, error } = await supabase
@@ -220,7 +223,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (error) {
       if (error.code === "23505") {
         return NextResponse.json(
-          { error: "Ja existe um cliente com este telefone neste negocio." },
+          { error: "Ja existe um cliente com este telefone nesta empresa." },
           { status: 409 }
         );
       }

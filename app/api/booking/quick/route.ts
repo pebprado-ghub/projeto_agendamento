@@ -10,6 +10,8 @@ type ConfirmBody = {
   bookedForName?: string;
   bookedForRelationship?: string;
   bookedForPhone?: string;
+  /** Checkbox de marketing (LGPD) no fluxo público. */
+  marketingOptIn?: boolean;
 };
 
 export async function GET(request: NextRequest) {
@@ -100,7 +102,9 @@ export async function POST(request: NextRequest) {
         bookedForRelationship: body.bookedForRelationship || null,
         bookedForPhone: body.bookedForPhone || null,
         startsAt: startsAt.toISOString(),
-        endsAt: endsAt.toISOString()
+        endsAt: endsAt.toISOString(),
+        marketingOptIn: body.marketingOptIn === true,
+        customerRecordSource: "other"
       })
     });
     const result = (await response.json()) as { data?: unknown; error?: string };

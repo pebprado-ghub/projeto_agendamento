@@ -135,13 +135,13 @@ export async function GET(request: NextRequest, { params }: Params) {
 
     if (error) {
       return NextResponse.json(
-        { error: "Falha ao carregar negocio." },
+        { error: "Falha ao carregar empresa." },
         { status: 500 }
       );
     }
 
     if (!data) {
-      return NextResponse.json({ error: "Negocio nao encontrado." }, { status: 404 });
+      return NextResponse.json({ error: "Empresa nao encontrada." }, { status: 404 });
     }
 
     return NextResponse.json({ data });
@@ -163,7 +163,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const body = (await request.json()) as UpdateBusinessInput;
     const name = body.name?.trim() || "";
     if (!name) {
-      return NextResponse.json({ error: "Nome do negocio e obrigatorio." }, { status: 400 });
+      return NextResponse.json({ error: "Nome da empresa e obrigatorio." }, { status: 400 });
     }
 
     const cnpjDigits = normalizeDigits(body.cnpj);

@@ -1,15 +1,17 @@
-import { InputHTMLAttributes } from "react";
+import type { InputHTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
 type CheckboxProps = Omit<InputHTMLAttributes<HTMLInputElement>, "type"> & {
-  label?: string;
+  /** Texto ou fragmento à direita da caixa; a caixa fica sempre à esquerda na mesma linha. */
+  label?: ReactNode;
 };
 
 export function Checkbox({ className, label, ...props }: CheckboxProps) {
+  const showLabel = label != null && label !== "";
   return (
     <label className={cn("uiCheckboxLabel", className)}>
       <input type="checkbox" className="uiCheckbox" {...props} />
-      {label ? <span>{label}</span> : null}
+      {showLabel ? <span className="uiCheckboxLabelText">{label}</span> : null}
     </label>
   );
 }

@@ -10,6 +10,53 @@ type CreateRequestBody = {
 
 const ALLOWED_PLAN_CODES = ["free", "pro", "enterprise"] as const;
 
+export async function GET(request: NextRequest) {
+  try {
+    const url = new URL(request.url);
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || "30")));
+    const status = (url.searchParams.get("status") || "").trim();
+    const businessId = (url.searchParams.get("businessId") || "").trim();
+
+    const supabase = getSupabaseAdmin();
+    let query = supabase
+      .from("subscription_change_requests")
+      .select(
+        "id, business_id, current_plan_code, requested_plan_code, requested_by_role, status, note, created_at, businesses(name, slug)"
+      )
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (status) query = query.eq("status", status);
+    if (businessId) query = query.eq("business_id", businessId);
+
+    const { data, error } = await query;
+    if (error) {
+      return NextResponse.json({ error: "Falha ao listar solicitações de plano." }, { status: 500 });
+    }
+
+    const normalized = (data || []).map((item) => ({
+      id: item.id,
+      businessId: item.business_id,
+      businessName:
+        Array.isArray(item.businesses) && item.businesses[0]?.name
+          ? item.businesses[0].name
+          : "Empresa",
+      businessSlug:
+        Array.isArray(item.businesses) && item.businesses[0]?.slug ? item.businesses[0].slug : "",
+      currentPlanCode: item.current_plan_code,
+      requestedPlanCode: item.requested_plan_code,
+      requestedByRole: item.requested_by_role,
+      status: item.status,
+      note: item.note,
+      createdAt: item.created_at,
+    }));
+
+    return NextResponse.json({ data: normalized });
+  } catch (error) {
+    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as CreateRequestBody;
@@ -46,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     if (activePending) {
       return NextResponse.json(
-        { error: "Já existe uma solicitação pendente para este negócio." },
+        { error: "Já existe uma solicitação pendente para esta empresa." },
         { status: 409 }
       );
     }

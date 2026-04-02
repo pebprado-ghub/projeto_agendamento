@@ -9,6 +9,7 @@ alter table calendar_connections enable row level security;
 alter table message_templates enable row level security;
 alter table conversation_state enable row level security;
 alter table appointments enable row level security;
+alter table business_closure_periods enable row level security;
 alter table customers enable row level security;
 alter table customer_payments enable row level security;
 

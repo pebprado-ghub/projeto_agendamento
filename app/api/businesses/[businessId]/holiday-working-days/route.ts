@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = { params: { businessId: string } };
 
-/** Datas em que o negócio atende mesmo sendo feriado (só informativo). */
+/** Datas em que a empresa atende mesmo sendo feriado (só informativo). */
 export async function GET(_request: NextRequest, { params }: Params) {
   try {
     const businessId = params.businessId;

@@ -3,8 +3,8 @@ import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { normalizeSessionRole } from "@/lib/authRoles";
 
 /**
- * Negócio fixo para o login `owner` (administrador do negócio):
- * 1) `OWNER_BUSINESS_ID` ou `CLIENT_BUSINESS_ID` (legado) no .env se houver vários negócios;
+ * Empresa fixa para o login `owner` (administrador da empresa):
+ * 1) `OWNER_BUSINESS_ID` ou `CLIENT_BUSINESS_ID` (legado) no .env se houver várias empresas;
  * 2) Se não houver env e existir **exatamente um** registro em `businesses`, usa esse UUID.
  */
 async function resolveOwnerBusinessId(): Promise<string | null> {

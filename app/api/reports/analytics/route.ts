@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { resolveScheduleIdForDate } from "@/lib/resolveBusinessHourSchedule";
 
 function monthBounds(month: string) {
   const [y, m] = month.split("-").map(Number);
@@ -55,8 +56,9 @@ export async function GET(request: NextRequest) {
     const supabase = getSupabaseAdmin();
     const { start, end } = monthBounds(month);
     const [year, monthNumber] = month.split("-").map(Number);
+    const midMonthIso = `${month}-15`;
 
-    const [{ data: appts }, { data: services }, { data: hours }, { data: customers }, { data: campaignEvents }] =
+    const [{ data: appts }, { data: services }, { data: customers }, { data: campaignEvents }] =
       await Promise.all([
         supabase
           .from("appointments")
@@ -66,13 +68,6 @@ export async function GET(request: NextRequest) {
           .lte("starts_at", end.toISOString())
           .limit(10000),
         supabase.from("services").select("id, name, duration_minutes").eq("business_id", businessId).limit(2000),
-        supabase
-          .from("business_hours")
-          .select("weekday, start_time, end_time, is_active")
-          .eq("business_id", businessId)
-          .in("weekday", [0, 1, 2, 3, 4, 5, 6])
-          .eq("is_active", true)
-          .limit(200),
         supabase
           .from("customers")
           .select("id, full_name, is_blocked")
@@ -86,6 +81,30 @@ export async function GET(request: NextRequest) {
           .lte("happened_at", end.toISOString())
           .limit(20000)
       ]);
+
+    const analyticsScheduleId = await resolveScheduleIdForDate(
+      supabase,
+      businessId,
+      midMonthIso
+    );
+
+    let hours: Array<{
+      weekday: number;
+      start_time: string;
+      end_time: string;
+      is_active: boolean;
+    }> | null = null;
+    if (analyticsScheduleId) {
+      const { data: hourRows } = await supabase
+        .from("business_hours")
+        .select("weekday, start_time, end_time, is_active")
+        .eq("business_id", businessId)
+        .eq("schedule_id", analyticsScheduleId)
+        .in("weekday", [0, 1, 2, 3, 4, 5, 6])
+        .eq("is_active", true)
+        .limit(200);
+      hours = hourRows;
+    }
 
     const servicesById = new Map((services || []).map((s) => [s.id, s]));
     const appointments = appts || [];

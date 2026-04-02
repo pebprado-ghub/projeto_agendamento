@@ -1,9 +1,43 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  BarChart2,
+  Building2,
+  Calendar,
+  CalendarX,
+  Clock,
+  CreditCard,
+  DollarSign,
+  FolderKanban,
+  LayoutDashboard,
+  MessageSquare,
+  Package,
+  Plug,
+  TrendingUp,
+  Users,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { AdminCard } from "@/components/admin/AdminCard";
 import { FieldGroup } from "@/components/admin/FieldGroup";
+import {
+  DeveloperBusinessesAgGrid,
+  type DeveloperBusinessGridRow
+} from "@/components/admin/DeveloperBusinessesAgGrid";
+import { BusinessClosureEditor } from "@/components/admin/BusinessClosureEditor";
+import {
+  DeveloperHourSchedulesAgGrid,
+  type HourScheduleGridRow
+} from "@/components/admin/DeveloperHourSchedulesAgGrid";
+import {
+  DeveloperMetricTable,
+  type DeveloperMetricBreakdownRow
+} from "@/components/admin/DeveloperMetricTable";
+import { DeveloperCommunicationHub } from "@/components/admin/DeveloperCommunicationHub";
+import { DeveloperPlansAgGrid } from "@/components/admin/DeveloperPlansAgGrid";
+import { OwnerServicesAgGrid } from "@/components/admin/OwnerServicesAgGrid";
 import { MetricCard } from "@/components/admin/MetricCard";
 import { CustomersManager } from "@/components/client/CustomersManager";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
@@ -11,12 +45,23 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { Tabs } from "@/components/ui/tabs";
+import { HelpHint } from "@/components/ui/help-hint";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMaskedFromDigits, maskCep } from "@/lib/masksBr";
 import { lookupViaCep } from "@/lib/viacep";
 import { resolveScheduleWeekday } from "@/lib/resolveScheduleWeekday";
 import { CNAE_OPTIONS, getCnaeByCode } from "@/lib/cnae";
 import { getLocalPriceFactor } from "@/lib/pricingLocal";
+import { getBrowserIanaTimezone } from "@/lib/browserTimezone";
+import { digitsOnly } from "@/lib/developerContactLinks";
+import { repairUtf8MisinterpretedAsLatin1 } from "@/lib/repairMojibake";
+
+function formatDeveloperCalendarModeLabel(mode?: string | null): string {
+  if (mode === "google") return "Google";
+  if (mode === "internal") return "Interna";
+  return "Não definido";
+}
 
 const weekDays = [
   { id: 0, label: "Domingo" },
@@ -70,7 +115,11 @@ const MESSAGE_TEMPLATE_ORTHOGRAPHY_FIXES: Array<{
 function normalizeTemplateOrthography(content: string) {
   let normalized = content;
   for (const rule of MESSAGE_TEMPLATE_ORTHOGRAPHY_FIXES) {
-    normalized = normalized.replace(rule.pattern, rule.replacement);
+    const { pattern, replacement } = rule;
+    normalized =
+      typeof replacement === "function"
+        ? normalized.replace(pattern, replacement)
+        : normalized.replace(pattern, replacement);
   }
   return normalized;
 }
@@ -87,6 +136,31 @@ type ServiceItem = {
   duration_minutes: number;
   price_cents: number | null;
   is_active: boolean;
+  booking_buffer_before_minutes: number;
+  booking_buffer_after_minutes: number;
+  booking_min_notice_minutes: number;
+  booking_max_days_ahead: number;
+  booking_daily_limit: number | null;
+  booking_slot_capacity: number;
+  waitlist_enabled: boolean;
+  reminder_24h_enabled: boolean;
+  reminder_2h_enabled: boolean;
+  reminder_30m_enabled: boolean;
+  attendance_confirmation_required: boolean;
+  attendance_confirmation_deadline_minutes: number;
+  auto_release_unconfirmed: boolean;
+  booking_reschedule_cutoff_minutes: number;
+  booking_cancel_cutoff_minutes: number;
+  post_visit_thank_you_enabled: boolean;
+  post_visit_coupon_enabled: boolean;
+  remarketing_enabled: boolean;
+  remarketing_inactive_days: number;
+  birthday_campaign_enabled: boolean;
+  auto_return_enabled: boolean;
+  auto_return_days: number;
+  one_click_reschedule_enabled: boolean;
+  checkin_qr_enabled: boolean;
+  auto_feedback_enabled: boolean;
 };
 
 type OfferPlanItem = {
@@ -170,7 +244,7 @@ type FinancialTrendPoint = {
 };
 
 type MonetizationPlan = {
-  code: "free" | "pro" | "enterprise";
+  code: string;
   name: string;
   monthly_price_cents: number;
   monthly_appointment_limit: number | null;
@@ -178,17 +252,93 @@ type MonetizationPlan = {
   allows_automations: boolean;
   allows_multi_unit: boolean;
   is_active: boolean;
+  feature_flags?: Record<string, boolean> | null;
 };
 
 type MonetizationUsage = {
   month: string;
   currentAppointments: number;
-  planCode: "free" | "pro" | "enterprise";
+  planCode: string;
   planStatus: "active" | "trialing" | "past_due" | "cancelled";
   monthlyAppointmentLimit: number | null;
   professionalLimit: number | null;
   automationsEnabled: boolean;
   multiUnitEnabled: boolean;
+};
+
+type SubscriptionChangeFeedback = {
+  id: string;
+  businessId: string;
+  businessName: string;
+  businessSlug: string;
+  currentPlanCode: string;
+  requestedPlanCode: string;
+  requestedByRole: string;
+  status: string;
+  note: string | null;
+  createdAt: string;
+};
+
+type SubscriptionFeedbackStatusFilter = "all" | "pending" | "approved" | "rejected" | "cancelled";
+
+type DeveloperBusinessMetrics = {
+  id: string;
+  name: string;
+  slug: string;
+  calendarMode: "internal" | "google" | null;
+  customerCount: number;
+  serviceCount: number;
+  appointmentCount: number;
+  appointmentsThisMonth: number;
+  upcomingAppointmentCount: number;
+};
+
+type DeveloperPlatformSummary = {
+  businessCount: number;
+  internalModeCount: number;
+  googleModeCount: number;
+  appointmentCount: number;
+  appointmentsThisMonth: number;
+  upcomingAppointmentCount: number;
+  customerCount: number;
+  serviceCount: number;
+  byBusiness: DeveloperBusinessMetrics[];
+};
+
+type DeveloperOverviewTabId = "daily" | "urgencies" | "communication";
+
+type DeveloperDashboardCategoryId = "companies" | "subscriptions" | "integrations";
+type CategoryAnalyticsRangeId = "30d" | "60d" | "90d" | "custom";
+
+const DEVELOPER_DASHBOARD_CATEGORY_ITEMS: Array<{
+  value: DeveloperDashboardCategoryId;
+  label: string;
+}> = [
+  { value: "companies", label: "Empresas" },
+  { value: "subscriptions", label: "Assinaturas" },
+  { value: "integrations", label: "Integrações" }
+];
+
+const DEVELOPER_OVERVIEW_TAB_ITEMS: Array<{
+  value: DeveloperOverviewTabId;
+  label: string;
+}> = [
+  { value: "daily", label: "Operação do dia" },
+  { value: "urgencies", label: "Urgências e pendências" },
+  { value: "communication", label: "Central de comunicação" }
+];
+
+const DEVELOPER_OVERVIEW_ICONS: Record<DeveloperOverviewTabId, LucideIcon> = {
+  daily: Calendar,
+  urgencies: AlertTriangle,
+  communication: MessageSquare
+};
+
+const DEVELOPER_OVERVIEW_HINTS: Record<DeveloperOverviewTabId, string> = {
+  daily: "Cada linha é uma empresa. Quem está com pouco volume no mês aparece primeiro — revise antes de ampliar campanhas.",
+  urgencies: "Conta o que falta para operar bem: WhatsApp, Google, serviços no catálogo e clientes no CRM.",
+  communication:
+    "Só aparecem empresas com algo a regular: WhatsApp, e-mail de contato ou pedido de mudança de plano pendente."
 };
 
 const SERVICE_ICONS = [
@@ -523,18 +673,107 @@ type ServiceTemplateItem = {
   color: string;
 };
 
+type BusinessDayShift = {
+  id: string;
+  startTime: string;
+  endTime: string;
+};
+
+type BusinessHourValidityTypeId =
+  | "indeterminate"
+  | "monthly"
+  | "annual"
+  | "custom";
+
+const HOUR_VALIDITY_LABEL: Record<BusinessHourValidityTypeId, string> = {
+  indeterminate: "Indeterminada",
+  monthly: "Mensal",
+  annual: "Anual",
+  custom: "Personalizado"
+};
+
+function hourValidityLabel(t: string): string {
+  return HOUR_VALIDITY_LABEL[t as BusinessHourValidityTypeId] ?? t;
+}
+
 type BusinessHoursState = {
   weekday: number;
   isActive: boolean;
-  startTime: string;
-  endTime: string;
-  hasLunchBreak: boolean;
-  lunchStartTime: string;
-  lunchEndTime: string;
+  shifts: BusinessDayShift[];
 };
+
+type BusinessHourApiRow = {
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  lunch_start_time?: string | null;
+  lunch_end_time?: string | null;
+  is_active: boolean;
+  sort_order?: number | null;
+};
+
+function newShiftClientId(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `shift-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  );
+}
+
+function createDefaultShift(): BusinessDayShift {
+  return { id: newShiftClientId(), startTime: "09:00", endTime: "18:00" };
+}
+
+function rowsToDayState(rows: BusinessHourApiRow[]): {
+  isActive: boolean;
+  shifts: BusinessDayShift[];
+} {
+  if (!rows.length) {
+    return { isActive: false, shifts: [createDefaultShift()] };
+  }
+  const sorted = [...rows].sort(
+    (a, b) =>
+      (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0) ||
+      String(a.start_time).localeCompare(String(b.start_time))
+  );
+  const activeRows = sorted.filter((r) => r.is_active);
+  if (!activeRows.length) {
+    return { isActive: false, shifts: [createDefaultShift()] };
+  }
+  if (
+    activeRows.length === 1 &&
+    activeRows[0].lunch_start_time &&
+    activeRows[0].lunch_end_time
+  ) {
+    const r = activeRows[0];
+    return {
+      isActive: true,
+      shifts: [
+        {
+          id: newShiftClientId(),
+          startTime: String(r.start_time).slice(0, 5),
+          endTime: String(r.lunch_start_time).slice(0, 5)
+        },
+        {
+          id: newShiftClientId(),
+          startTime: String(r.lunch_end_time).slice(0, 5),
+          endTime: String(r.end_time).slice(0, 5)
+        }
+      ]
+    };
+  }
+  return {
+    isActive: true,
+    shifts: activeRows.map((r) => ({
+      id: newShiftClientId(),
+      startTime: String(r.start_time).slice(0, 5),
+      endTime: String(r.end_time).slice(0, 5)
+    }))
+  };
+}
 
 type AppointmentSummary = {
   id: string;
+  service_id?: string | null;
   starts_at: string;
   ends_at: string;
   customer_name: string | null;
@@ -604,32 +843,6 @@ function maskPhoneBr(value: string) {
     return `+${digits.slice(0, 2)} (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`;
   }
   return `+${digits.slice(0, 2)} (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9)}`;
-}
-
-function inferTimezoneFromPhone(value: string) {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length < 4) return null;
-  const ddi = digits.slice(0, 2);
-  const ddd = digits.slice(2, 4);
-
-  if (ddi !== "55") return null;
-
-  const map: Record<string, string> = {
-    "68": "America/Rio_Branco",
-    "69": "America/Porto_Velho",
-    "92": "America/Manaus",
-    "97": "America/Manaus",
-    "95": "America/Boa_Vista",
-    "65": "America/Cuiaba",
-    "66": "America/Cuiaba",
-    "67": "America/Campo_Grande"
-  };
-
-  return map[ddd] || "America/Sao_Paulo";
-}
-
-function digitsOnly(value: string | null | undefined) {
-  return (value || "").replace(/\D/g, "");
 }
 
 function formatDatePtBr(dateIso: string) {
@@ -783,7 +996,6 @@ export default function HomePage() {
   const [businessContextReady, setBusinessContextReady] = useState(false);
   const [name, setName] = useState("");
   const [businessType, setBusinessType] = useState("");
-  const [timezone, setTimezone] = useState("America/Sao_Paulo");
   const [greetingTemplate, setGreetingTemplate] = useState(
     "Olá! Bem-vindo(a). Digite 1 para agendar, 2 para reagendar, 3 para cancelar."
   );
@@ -861,7 +1073,11 @@ export default function HomePage() {
     confirmations: false,
     shifts: false,
     whatsapp: false,
-    campaigns: false
+    campaigns: false,
+    reputation: false
+  });
+  const [hoursSettingsSectionOpen, setHoursSettingsSectionOpen] = useState({
+    schedule: true
   });
   const [isSaving, setIsSaving] = useState(false);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
@@ -869,6 +1085,24 @@ export default function HomePage() {
   const [feedbackType, setFeedbackType] = useState<"success" | "error" | "">(
     ""
   );
+  type DeveloperBusinessFormSection =
+    | "identificacao"
+    | "endereco"
+    | "contato"
+    | "integracao"
+    | "operacao";
+  const [developerBusinessFormSection, setDeveloperBusinessFormSection] =
+    useState<DeveloperBusinessFormSection | null>("identificacao");
+  const [developerNewBusinessModalOpen, setDeveloperNewBusinessModalOpen] = useState(false);
+  const [developerBusinessModalMode, setDeveloperBusinessModalMode] = useState<"create" | "edit">(
+    "create"
+  );
+  /** Novo cadastro: não autoselecionar empresa na lista nem hidratar o form a partir do tenant. */
+  const [developerBusinessCreatingNew, setDeveloperBusinessCreatingNew] = useState(false);
+  /** Restaura o contexto ao fechar o modal de nova empresa sem salvar. */
+  const [businessIdBeforeNewModal, setBusinessIdBeforeNewModal] = useState<string | null>(null);
+  const [developerBusinessRequiredFieldErrors, setDeveloperBusinessRequiredFieldErrors] =
+    useState<Partial<Record<"name" | "cnaeCode", string>>>({});
   const [businesses, setBusinesses] = useState<
     Array<{
       id: string;
@@ -925,6 +1159,7 @@ export default function HomePage() {
       multi_unit_enabled?: boolean | null;
       booking_reschedule_cutoff_minutes?: number | null;
       booking_cancel_cutoff_minutes?: number | null;
+      created_at?: string | null;
     }>
   >([]);
   const [cnpj, setCnpj] = useState("");
@@ -962,15 +1197,11 @@ export default function HomePage() {
   const [serviceImages, setServiceImages] = useState<string[]>([]);
   const [serviceDuration, setServiceDuration] = useState("30");
   const [servicePrice, setServicePrice] = useState("");
-  const [serviceSearch, setServiceSearch] = useState("");
-  const [serviceCategoryFilter, setServiceCategoryFilter] = useState("");
-  const [serviceStatusFilter, setServiceStatusFilter] = useState<
-    "" | "active" | "inactive"
-  >("");
-  const [servicesViewMode, setServicesViewMode] = useState<"list" | "grid">("list");
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [serviceModalMode, setServiceModalMode] = useState<"create" | "edit">("create");
-  const [serviceModalTab, setServiceModalTab] = useState<"info" | "visual" | "images">("info");
+  const [serviceModalTab, setServiceModalTab] = useState<"info" | "agenda" | "visual">(
+    "info"
+  );
   const [serviceTemplatePreviewName, setServiceTemplatePreviewName] = useState("");
   const [serviceTemplatePreviewItems, setServiceTemplatePreviewItems] = useState<
     Array<ServiceTemplateItem & { selected: boolean }>
@@ -985,6 +1216,56 @@ export default function HomePage() {
   const [editingImages, setEditingImages] = useState<string[]>([]);
   const [editingDuration, setEditingDuration] = useState("30");
   const [editingPrice, setEditingPrice] = useState("");
+  const [serviceBookingBufferBefore, setServiceBookingBufferBefore] = useState("0");
+  const [serviceBookingBufferAfter, setServiceBookingBufferAfter] = useState("0");
+  const [serviceBookingMinNotice, setServiceBookingMinNotice] = useState("0");
+  const [serviceBookingMaxDays, setServiceBookingMaxDays] = useState("60");
+  const [serviceBookingDailyLimit, setServiceBookingDailyLimit] = useState("");
+  const [serviceBookingSlotCapacity, setServiceBookingSlotCapacity] = useState("1");
+  const [serviceWaitlistEnabled, setServiceWaitlistEnabled] = useState(true);
+  const [serviceReminder24h, setServiceReminder24h] = useState(true);
+  const [serviceReminder2h, setServiceReminder2h] = useState(true);
+  const [serviceReminder30m, setServiceReminder30m] = useState(true);
+  const [serviceAttendanceRequired, setServiceAttendanceRequired] = useState(true);
+  const [serviceAttendanceDeadline, setServiceAttendanceDeadline] = useState("1440");
+  const [serviceAutoRelease, setServiceAutoRelease] = useState(true);
+  const [editingBookingBufferBefore, setEditingBookingBufferBefore] = useState("0");
+  const [editingBookingBufferAfter, setEditingBookingBufferAfter] = useState("0");
+  const [editingBookingMinNotice, setEditingBookingMinNotice] = useState("0");
+  const [editingBookingMaxDays, setEditingBookingMaxDays] = useState("60");
+  const [editingBookingDailyLimit, setEditingBookingDailyLimit] = useState("");
+  const [editingBookingSlotCapacity, setEditingBookingSlotCapacity] = useState("1");
+  const [editingWaitlistEnabled, setEditingWaitlistEnabled] = useState(true);
+  const [editingReminder24h, setEditingReminder24h] = useState(true);
+  const [editingReminder2h, setEditingReminder2h] = useState(true);
+  const [editingReminder30m, setEditingReminder30m] = useState(true);
+  const [editingAttendanceRequired, setEditingAttendanceRequired] = useState(true);
+  const [editingAttendanceDeadline, setEditingAttendanceDeadline] = useState("1440");
+  const [editingAutoRelease, setEditingAutoRelease] = useState(true);
+  const [serviceRescheduleCutoff, setServiceRescheduleCutoff] = useState("0");
+  const [serviceCancelCutoff, setServiceCancelCutoff] = useState("0");
+  const [servicePostVisitThankYou, setServicePostVisitThankYou] = useState(true);
+  const [servicePostVisitCoupon, setServicePostVisitCoupon] = useState(true);
+  const [serviceRemarketing, setServiceRemarketing] = useState(true);
+  const [serviceRemarketingInactiveDays, setServiceRemarketingInactiveDays] = useState("30");
+  const [serviceBirthday, setServiceBirthday] = useState(true);
+  const [serviceAutoReturn, setServiceAutoReturn] = useState(true);
+  const [serviceAutoReturnDays, setServiceAutoReturnDays] = useState("30");
+  const [serviceOneClickReschedule, setServiceOneClickReschedule] = useState(true);
+  const [serviceCheckinQr, setServiceCheckinQr] = useState(true);
+  const [serviceAutoFeedback, setServiceAutoFeedback] = useState(false);
+  const [editingRescheduleCutoff, setEditingRescheduleCutoff] = useState("0");
+  const [editingCancelCutoff, setEditingCancelCutoff] = useState("0");
+  const [editingPostVisitThankYou, setEditingPostVisitThankYou] = useState(true);
+  const [editingPostVisitCoupon, setEditingPostVisitCoupon] = useState(true);
+  const [editingRemarketing, setEditingRemarketing] = useState(true);
+  const [editingRemarketingInactiveDays, setEditingRemarketingInactiveDays] = useState("30");
+  const [editingBirthday, setEditingBirthday] = useState(true);
+  const [editingAutoReturn, setEditingAutoReturn] = useState(true);
+  const [editingAutoReturnDays, setEditingAutoReturnDays] = useState("30");
+  const [editingOneClickReschedule, setEditingOneClickReschedule] = useState(true);
+  const [editingCheckinQr, setEditingCheckinQr] = useState(true);
+  const [editingAutoFeedback, setEditingAutoFeedback] = useState(false);
   const [serviceUploadLoading, setServiceUploadLoading] = useState(false);
   const [calendarId, setCalendarId] = useState("primary");
   const [accessToken, setAccessToken] = useState("");
@@ -998,53 +1279,62 @@ export default function HomePage() {
     weekDaysSchedule.map((day) => ({
       weekday: day.id,
       isActive: day.id >= 1 && day.id <= 5,
-      startTime: "09:00",
-      endTime: "18:00",
-      hasLunchBreak: false,
-      lunchStartTime: "12:00",
-      lunchEndTime: "13:00"
+      shifts: [createDefaultShift()]
     }))
   );
+  const [hourScheduleId, setHourScheduleId] = useState<string | null>(null);
+  const [hourValidityType, setHourValidityType] =
+    useState<BusinessHourValidityTypeId>("indeterminate");
+  const [hourCustomFrom, setHourCustomFrom] = useState("");
+  const [hourCustomTo, setHourCustomTo] = useState("");
+  const [hourSchedulesList, setHourSchedulesList] = useState<
+    Array<{
+      id: string;
+      validityType: string;
+      validFrom: string;
+      validTo: string | null;
+      createdAt: string;
+      updatedAt: string;
+      isVigenteHoje: boolean;
+    }>
+  >([]);
+  const [hourScheduleGaps, setHourScheduleGaps] = useState<Array<{ from: string; to: string }>>(
+    []
+  );
+  const [hourScheduleOverlapPrompt, setHourScheduleOverlapPrompt] = useState<null | {
+    message: string;
+    overlapping: Array<{
+      id: string;
+      validityType: string;
+      validFrom: string;
+      validTo: string | null;
+    }>;
+  }>(null);
+  const [hourScheduleModalOpen, setHourScheduleModalOpen] = useState(false);
+  const [hourScheduleModalMode, setHourScheduleModalMode] = useState<"create" | "edit">(
+    "create"
+  );
+  const [closureModalOpen, setClosureModalOpen] = useState(false);
   const [hoursFeedback, setHoursFeedback] = useState("");
-  const [bookingBufferBeforeMinutes, setBookingBufferBeforeMinutes] = useState("0");
-  const [bookingBufferAfterMinutes, setBookingBufferAfterMinutes] = useState("0");
-  const [bookingMinNoticeMinutes, setBookingMinNoticeMinutes] = useState("0");
-  const [bookingMaxDaysAhead, setBookingMaxDaysAhead] = useState("60");
-  const [bookingDailyLimit, setBookingDailyLimit] = useState("");
-  const [bookingSlotCapacity, setBookingSlotCapacity] = useState("1");
-  const [waitlistEnabled, setWaitlistEnabled] = useState(true);
-  const [reminder24hEnabled, setReminder24hEnabled] = useState(true);
-  const [reminder2hEnabled, setReminder2hEnabled] = useState(true);
-  const [reminder30mEnabled, setReminder30mEnabled] = useState(true);
-  const [attendanceConfirmationRequired, setAttendanceConfirmationRequired] = useState(true);
-  const [attendanceConfirmationDeadlineMinutes, setAttendanceConfirmationDeadlineMinutes] =
-    useState("1440");
-  const [autoReleaseUnconfirmed, setAutoReleaseUnconfirmed] = useState(true);
-  const [postVisitThankYouEnabled, setPostVisitThankYouEnabled] = useState(true);
-  const [postVisitCouponEnabled, setPostVisitCouponEnabled] = useState(true);
-  const [remarketingEnabled, setRemarketingEnabled] = useState(true);
-  const [remarketingInactiveDays, setRemarketingInactiveDays] = useState("30");
-  const [birthdayCampaignEnabled, setBirthdayCampaignEnabled] = useState(true);
-  const [autoReturnEnabled, setAutoReturnEnabled] = useState(true);
-  const [autoReturnDays, setAutoReturnDays] = useState("30");
-  const [oneClickRescheduleEnabled, setOneClickRescheduleEnabled] = useState(true);
-  const [checkinQrEnabled, setCheckinQrEnabled] = useState(true);
-  const [autoFeedbackEnabled, setAutoFeedbackEnabled] = useState(false);
   const [googleReviewsEnabled, setGoogleReviewsEnabled] = useState(false);
   const [googleReviewsUrl, setGoogleReviewsUrl] = useState("");
-  const [bookingRescheduleCutoffMinutes, setBookingRescheduleCutoffMinutes] =
-    useState("0");
-  const [bookingCancelCutoffMinutes, setBookingCancelCutoffMinutes] = useState("0");
   const [clientWhatsapp, setClientWhatsapp] = useState("");
   const [developerArea, setDeveloperArea] = useState<"configuration" | "dashboard">(
-    "configuration"
+    "dashboard"
   );
   const [configurationArea, setConfigurationArea] = useState<
-    "business" | "integrations" | "calendar"
+    "business" | "plans" | "integrations"
   >("business");
-  const [dashboardArea, setDashboardArea] = useState<"overview" | "businesses">(
-    "overview"
-  );
+  const [dashboardArea, setDashboardArea] = useState<
+    "overview" | "categories" | "communication"
+  >("overview");
+  const [developerDashboardCategory, setDeveloperDashboardCategory] =
+    useState<DeveloperDashboardCategoryId>("companies");
+  const [categoryAnalyticsRange, setCategoryAnalyticsRange] =
+    useState<CategoryAnalyticsRangeId>("30d");
+  const [categoryAnalyticsStartDate, setCategoryAnalyticsStartDate] = useState("");
+  const [categoryAnalyticsEndDate, setCategoryAnalyticsEndDate] = useState("");
+  const [categoryPeriodLayerOpen, setCategoryPeriodLayerOpen] = useState(false);
   const [clientMainArea, setClientMainArea] = useState<"dashboard" | "settings">(
     "dashboard"
   );
@@ -1078,9 +1368,23 @@ export default function HomePage() {
   const [businessQuery, setBusinessQuery] = useState("");
   const [financialMonth, setFinancialMonth] = useState(new Date().toISOString().slice(0, 7));
   const [monetizationPlans, setMonetizationPlans] = useState<MonetizationPlan[]>([]);
+  const [subscriptionChangeFeedbacks, setSubscriptionChangeFeedbacks] = useState<
+    SubscriptionChangeFeedback[]
+  >([]);
+  const [subscriptionChangeFeedbacksError, setSubscriptionChangeFeedbacksError] = useState("");
+  const [subscriptionFeedbackStatusFilter, setSubscriptionFeedbackStatusFilter] =
+    useState<SubscriptionFeedbackStatusFilter>("all");
   const [monetizationUsage, setMonetizationUsage] = useState<MonetizationUsage | null>(null);
   const [overviewMonetizationUsage, setOverviewMonetizationUsage] =
     useState<MonetizationUsage | null>(null);
+  const [developerPlatformSummary, setDeveloperPlatformSummary] =
+    useState<DeveloperPlatformSummary | null>(null);
+  const [developerPlatformSummaryLoading, setDeveloperPlatformSummaryLoading] =
+    useState(false);
+  const [developerPlatformSummaryError, setDeveloperPlatformSummaryError] =
+    useState("");
+  const [developerCommunicationFocusBusinessId, setDeveloperCommunicationFocusBusinessId] =
+    useState<string | null>(null);
   const [planCode, setPlanCode] = useState<"free" | "pro" | "enterprise">("free");
   const [planStatus, setPlanStatus] = useState<"active" | "trialing" | "past_due" | "cancelled">(
     "active"
@@ -1090,10 +1394,16 @@ export default function HomePage() {
   const [planAutomationsEnabled, setPlanAutomationsEnabled] = useState(false);
   const [planMultiUnitEnabled, setPlanMultiUnitEnabled] = useState(false);
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
-  const [requestedPlanCode, setRequestedPlanCode] = useState<"free" | "pro" | "enterprise">("free");
+  const [requestedPlanCode, setRequestedPlanCode] = useState<string>("free");
   const [subscriptionRequestNote, setSubscriptionRequestNote] = useState("");
   const [subscriptionRequestFeedback, setSubscriptionRequestFeedback] = useState("");
   const [subscriptionRequestSaving, setSubscriptionRequestSaving] = useState(false);
+  const [ownerSubscriptionFeedbacks, setOwnerSubscriptionFeedbacks] = useState<
+    SubscriptionChangeFeedback[]
+  >([]);
+  const [ownerSubscriptionFeedbacksError, setOwnerSubscriptionFeedbacksError] = useState("");
+  const [ownerSubscriptionFeedbackStatusFilter, setOwnerSubscriptionFeedbackStatusFilter] =
+    useState<SubscriptionFeedbackStatusFilter>("all");
   const [offerPlans, setOfferPlans] = useState<OfferPlanItem[]>([]);
   const [offerFeedback, setOfferFeedback] = useState("");
   const [offerName, setOfferName] = useState("");
@@ -1177,6 +1487,7 @@ export default function HomePage() {
     multi_unit_enabled?: boolean | null;
     booking_reschedule_cutoff_minutes?: number | null;
     booking_cancel_cutoff_minutes?: number | null;
+    created_at?: string | null;
   };
 
   async function loadBusinesses() {
@@ -1197,7 +1508,7 @@ export default function HomePage() {
           error?: string;
         };
         if (!listResponse.ok) {
-          throw new Error(listResult.error || "Erro ao carregar negocios.");
+          throw new Error(listResult.error || "Erro ao carregar empresas.");
         }
         const loaded = listResult.data || [];
         if (loaded.length === 1) {
@@ -1212,11 +1523,11 @@ export default function HomePage() {
         setBusinesses([]);
         if (loaded.length === 0) {
           setFeedback(
-            "Nenhum negócio encontrado no banco. Cadastre um negócio (área Desenvolvedor) ou confira NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY."
+            "Nenhuma empresa encontrada no banco. Cadastre uma empresa (área Desenvolvedor) ou confira NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY."
           );
         } else {
           setFeedback(
-            "Há mais de um negócio cadastrado: defina OWNER_BUSINESS_ID ou CLIENT_BUSINESS_ID no .env.local com o UUID do negócio deste login."
+            "Há mais de uma empresa cadastrada: defina OWNER_BUSINESS_ID ou CLIENT_BUSINESS_ID no .env.local com o UUID da empresa deste login."
           );
         }
         setFeedbackType("error");
@@ -1227,7 +1538,7 @@ export default function HomePage() {
       const result = (await response.json()) as { data?: BusinessRow; error?: string };
 
       if (!response.ok) {
-        throw new Error(result.error || "Erro ao carregar negocio.");
+        throw new Error(result.error || "Erro ao carregar empresa.");
       }
 
       const one = result.data;
@@ -1250,13 +1561,15 @@ export default function HomePage() {
     };
 
     if (!response.ok) {
-      throw new Error(result.error || "Erro ao carregar negocios.");
+      throw new Error(result.error || "Erro ao carregar empresas.");
     }
 
     const loaded = result.data || [];
     setBusinesses(loaded);
 
-    if (!selectedBusinessId && loaded.length > 0) {
+    const skipDeveloperAutoPick =
+      role === "developer" && developerBusinessCreatingNew;
+    if (!selectedBusinessId && loaded.length > 0 && !skipDeveloperAutoPick) {
       setSelectedBusinessId(loaded[0].id);
       setCalendarMode(loaded[0].calendar_mode || "internal");
       setClientWhatsapp(loaded[0].whatsapp_number || "");
@@ -1315,21 +1628,60 @@ export default function HomePage() {
     setRefreshToken("");
   }
 
-  async function loadBusinessHours(businessId: string) {
+  async function loadBusinessHourSchedules(businessId: string) {
+    if (!businessId) {
+      setHourSchedulesList([]);
+      setHourScheduleGaps([]);
+      return;
+    }
+
+    const response = await fetch(`/api/business-hour-schedules?businessId=${businessId}`);
+    const result = (await response.json()) as {
+      data?: Array<{
+        id: string;
+        validityType: string;
+        validFrom: string;
+        validTo: string | null;
+        createdAt: string;
+        updatedAt: string;
+        isVigenteHoje: boolean;
+      }>;
+      scheduleGaps?: Array<{ from: string; to: string }>;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(result.error || "Erro ao listar agendas de horario.");
+    }
+
+    setHourSchedulesList(result.data || []);
+    setHourScheduleGaps(result.scheduleGaps || []);
+  }
+
+  async function loadBusinessHours(
+    businessId: string,
+    options?: { scheduleId?: string | null; forDate?: string }
+  ) {
     if (!businessId) {
       return;
     }
 
-    const response = await fetch(`/api/business-hours?businessId=${businessId}`);
+    const params = new URLSearchParams({ businessId });
+    if (options?.scheduleId) {
+      params.set("scheduleId", options.scheduleId);
+    } else if (options?.forDate) {
+      params.set("forDate", options.forDate);
+    }
+
+    const response = await fetch(`/api/business-hours?${params}`);
     const result = (await response.json()) as {
-      data?: Array<{
-        weekday: number;
-        start_time: string;
-        end_time: string;
-        lunch_start_time?: string | null;
-        lunch_end_time?: string | null;
-        is_active: boolean;
-      }>;
+      data?: BusinessHourApiRow[];
+      schedule?: {
+        id: string;
+        validity_type: string;
+        valid_from: string;
+        valid_to: string | null;
+      } | null;
       error?: string;
     };
 
@@ -1337,31 +1689,52 @@ export default function HomePage() {
       throw new Error(result.error || "Erro ao carregar horarios.");
     }
 
-    const defaultRows = weekDaysSchedule.map((day) => ({
-      weekday: day.id,
-      isActive: day.id >= 1 && day.id <= 5,
-      startTime: "09:00",
-      endTime: "18:00",
-      hasLunchBreak: false,
-      lunchStartTime: "12:00",
-      lunchEndTime: "13:00"
-    }));
-
-    const map = new Map((result.data || []).map((item) => [item.weekday, item]));
-    const merged = defaultRows.map((row) => {
-      const existing = map.get(row.weekday);
-      if (!existing) {
-        return row;
+    if (result.schedule) {
+      setHourScheduleId(result.schedule.id);
+      const vt = result.schedule.validity_type;
+      if (
+        vt === "indeterminate" ||
+        vt === "monthly" ||
+        vt === "annual" ||
+        vt === "custom"
+      ) {
+        setHourValidityType(vt);
       }
-      return {
-        weekday: row.weekday,
-        isActive: existing.is_active,
-        startTime: existing.start_time.slice(0, 5),
-        endTime: existing.end_time.slice(0, 5),
-        hasLunchBreak: Boolean(existing.lunch_start_time && existing.lunch_end_time),
-        lunchStartTime: existing.lunch_start_time?.slice(0, 5) || "12:00",
-        lunchEndTime: existing.lunch_end_time?.slice(0, 5) || "13:00"
-      };
+      if (result.schedule.validity_type === "custom") {
+        setHourCustomFrom(result.schedule.valid_from);
+        setHourCustomTo(result.schedule.valid_to ?? "");
+      } else {
+        setHourCustomFrom("");
+        setHourCustomTo("");
+      }
+    } else {
+      setHourScheduleId(null);
+      setHourValidityType("indeterminate");
+      setHourCustomFrom("");
+      setHourCustomTo("");
+    }
+
+    const byWeekday = new Map<number, BusinessHourApiRow[]>();
+    for (const item of result.data || []) {
+      const list = byWeekday.get(item.weekday);
+      if (list) {
+        list.push(item);
+      } else {
+        byWeekday.set(item.weekday, [item]);
+      }
+    }
+
+    const merged = weekDaysSchedule.map((day) => {
+      const list = byWeekday.get(day.id) || [];
+      if (!list.length) {
+        return {
+          weekday: day.id,
+          isActive: day.id >= 1 && day.id <= 5,
+          shifts: [createDefaultShift()]
+        };
+      }
+      const { isActive, shifts } = rowsToDayState(list);
+      return { weekday: day.id, isActive, shifts };
     });
     setBusinessHours(merged);
   }
@@ -1494,6 +1867,41 @@ export default function HomePage() {
       throw new Error(result.error || "Erro ao carregar planos.");
     }
     setMonetizationPlans(result.data || []);
+  }
+
+  async function loadSubscriptionChangeFeedbacks(statusFilter: SubscriptionFeedbackStatusFilter) {
+    const statusQuery = statusFilter === "all" ? "" : `&status=${encodeURIComponent(statusFilter)}`;
+    const response = await fetch(`/api/subscription-change-requests?limit=40${statusQuery}`);
+    const result = (await response.json()) as {
+      data?: SubscriptionChangeFeedback[];
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(result.error || "Erro ao carregar feedbacks de planos.");
+    }
+    setSubscriptionChangeFeedbacks(result.data || []);
+    setSubscriptionChangeFeedbacksError("");
+  }
+
+  async function loadOwnerSubscriptionFeedbacks(
+    businessId: string,
+    statusFilter: SubscriptionFeedbackStatusFilter
+  ) {
+    const statusQuery = statusFilter === "all" ? "" : `&status=${encodeURIComponent(statusFilter)}`;
+    const response = await fetch(
+      `/api/subscription-change-requests?limit=30&businessId=${encodeURIComponent(
+        businessId
+      )}${statusQuery}`
+    );
+    const result = (await response.json()) as {
+      data?: SubscriptionChangeFeedback[];
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(result.error || "Erro ao carregar histórico de solicitações.");
+    }
+    setOwnerSubscriptionFeedbacks(result.data || []);
+    setOwnerSubscriptionFeedbacksError("");
   }
 
   async function loadMonetizationUsage(businessId: string, month: string) {
@@ -1671,6 +2079,32 @@ export default function HomePage() {
     }
   }
 
+  function resolveServiceRulesForAppointment(serviceId: string | null | undefined) {
+    const biz = businesses.find((b) => b.id === selectedBusinessId);
+    const svc = serviceId ? services.find((s) => s.id === serviceId) : undefined;
+    return {
+      cancelCutoff: Math.max(
+        0,
+        Number(svc?.booking_cancel_cutoff_minutes ?? biz?.booking_cancel_cutoff_minutes ?? 0)
+      ),
+      rescheduleCutoff: Math.max(
+        0,
+        Number(svc?.booking_reschedule_cutoff_minutes ?? biz?.booking_reschedule_cutoff_minutes ?? 0)
+      ),
+      autoReturnEnabled: svc
+        ? svc.auto_return_enabled !== false
+        : biz?.auto_return_enabled !== false,
+      autoReturnDays: Math.max(7, Number(svc?.auto_return_days ?? biz?.auto_return_days ?? 30)),
+      checkinQrEnabled: svc ? svc.checkin_qr_enabled !== false : biz?.checkin_qr_enabled !== false,
+      autoFeedbackEnabled: svc
+        ? svc.auto_feedback_enabled === true
+        : biz?.auto_feedback_enabled === true,
+      oneClickRescheduleEnabled: svc
+        ? svc.one_click_reschedule_enabled !== false
+        : biz?.one_click_reschedule_enabled !== false
+    };
+  }
+
   function buildQuickActionTemplate(action: "confirm" | "cancel" | "shift", shiftMinutes: number) {
     if (action === "confirm") {
       return `${confirmationTemplate}\n\nStatus: {{status}}.\nData: {{data}} {{inicio}}.`;
@@ -1725,9 +2159,11 @@ export default function HomePage() {
       } else {
         setAppointmentActionFeedback("Acao aplicada com sucesso.");
       }
+      const apptRow = clientAppointments.find((a) => a.id === appointmentId);
+      const quickRules = resolveServiceRulesForAppointment(apptRow?.service_id);
       if (
         action === "cancel" &&
-        oneClickRescheduleEnabled &&
+        quickRules.oneClickRescheduleEnabled &&
         result.suggestedSlots &&
         result.suggestedSlots.length > 0
       ) {
@@ -1758,17 +2194,18 @@ export default function HomePage() {
     }
   }
 
-  async function handleCreateAutoReturn(appointmentId: string) {
+  async function handleCreateAutoReturn(appointmentId: string, daysAhead?: number) {
     if (!selectedBusinessId) return;
     setAppointmentActionFeedback("");
     setAppointmentActionLoadingId(appointmentId);
     try {
+      const ahead = Math.max(7, Number(daysAhead) || 30);
       const response = await fetch(`/api/appointments/${appointmentId}/auto-return`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId: selectedBusinessId,
-          daysAhead: Math.max(7, Number(autoReturnDays) || 30)
+          daysAhead: ahead
         })
       });
       const result = (await response.json()) as { error?: string; message?: string };
@@ -1853,6 +2290,10 @@ export default function HomePage() {
           businessId?: string | null;
         };
         setRole(result.role);
+        if (result.role === "developer") {
+          setDeveloperArea("dashboard");
+          setDashboardArea("overview");
+        }
         if (result.role === "owner" && result.businessId) {
           setPrimaryTenantBusinessId(result.businessId);
           setSelectedBusinessId(result.businessId);
@@ -1867,6 +2308,53 @@ export default function HomePage() {
       }
     })();
   }, [router]);
+
+  const loadDeveloperPlatformSummary = useCallback(async (options?: { quiet?: boolean }) => {
+    const quiet = options?.quiet === true;
+    if (!quiet) {
+      setDeveloperPlatformSummaryLoading(true);
+      setDeveloperPlatformSummaryError("");
+    }
+    try {
+      const response = await fetch("/api/admin/platform-summary");
+      const raw = await response.text();
+      let json: { data?: DeveloperPlatformSummary; error?: string } = {};
+      if (raw.trim().length > 0) {
+        try {
+          json = JSON.parse(raw) as { data?: DeveloperPlatformSummary; error?: string };
+        } catch {
+          throw new Error(
+            response.ok
+              ? "Resposta inválida do servidor ao carregar o resumo."
+              : "Resposta inválida do servidor."
+          );
+        }
+      } else if (!response.ok) {
+        throw new Error("Resposta vazia do servidor.");
+      }
+      if (!response.ok) {
+        throw new Error(json.error || "Falha ao carregar resumo da plataforma.");
+      }
+      if (json.data) {
+        setDeveloperPlatformSummary(json.data);
+      }
+    } catch (error) {
+      if (!quiet) {
+        setDeveloperPlatformSummaryError((error as Error).message);
+      }
+    } finally {
+      if (!quiet) {
+        setDeveloperPlatformSummaryLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (authLoading || role !== "developer") {
+      return;
+    }
+    void loadDeveloperPlatformSummary();
+  }, [authLoading, role, loadDeveloperPlatformSummary]);
 
   useEffect(() => {
     if (authLoading || !role) {
@@ -1890,10 +2378,16 @@ export default function HomePage() {
     void loadBusinessHours(selectedBusinessId).catch((error: Error) => {
       setHoursFeedback(error.message);
     });
+    void loadBusinessHourSchedules(selectedBusinessId).catch((error: Error) => {
+      setHoursFeedback(error.message);
+    });
     void loadMessageTemplates(selectedBusinessId).catch((error: Error) => {
       setMessageTemplateFeedback(error.message);
     });
     const selectedBusiness = businesses.find((b) => b.id === selectedBusinessId);
+    if (role === "developer" && developerBusinessCreatingNew) {
+      return;
+    }
     if (selectedBusiness) {
       setCalendarMode(selectedBusiness.calendar_mode || "internal");
       setClientWhatsapp(formatMaskedFromDigits(selectedBusiness.whatsapp_number, maskPhoneBr));
@@ -1914,50 +2408,6 @@ export default function HomePage() {
       setCnaeCode(selectedBusiness.cnae_code || "");
       setCnaeDescription(selectedBusiness.cnae_description || "");
       setBusinessType(selectedBusiness.cnae_description || "");
-      setTimezone(selectedBusiness.timezone || "America/Sao_Paulo");
-      setBookingBufferBeforeMinutes(
-        String(Math.max(0, Number(selectedBusiness.booking_buffer_before_minutes || 0)))
-      );
-      setBookingBufferAfterMinutes(
-        String(Math.max(0, Number(selectedBusiness.booking_buffer_after_minutes || 0)))
-      );
-      setBookingMinNoticeMinutes(
-        String(Math.max(0, Number(selectedBusiness.booking_min_notice_minutes || 0)))
-      );
-      setBookingMaxDaysAhead(
-        String(Math.max(1, Number(selectedBusiness.booking_max_days_ahead || 60)))
-      );
-      setBookingDailyLimit(
-        selectedBusiness.booking_daily_limit
-          ? String(selectedBusiness.booking_daily_limit)
-          : ""
-      );
-      setBookingSlotCapacity(
-        String(Math.max(1, Number(selectedBusiness.booking_slot_capacity || 1)))
-      );
-      setWaitlistEnabled(selectedBusiness.waitlist_enabled !== false);
-      setReminder24hEnabled(selectedBusiness.reminder_24h_enabled !== false);
-      setReminder2hEnabled(selectedBusiness.reminder_2h_enabled !== false);
-      setReminder30mEnabled(selectedBusiness.reminder_30m_enabled !== false);
-      setAttendanceConfirmationRequired(
-        selectedBusiness.attendance_confirmation_required !== false
-      );
-      setAttendanceConfirmationDeadlineMinutes(
-        String(Math.max(60, Number(selectedBusiness.attendance_confirmation_deadline_minutes || 1440)))
-      );
-      setAutoReleaseUnconfirmed(selectedBusiness.auto_release_unconfirmed !== false);
-      setPostVisitThankYouEnabled(selectedBusiness.post_visit_thank_you_enabled !== false);
-      setPostVisitCouponEnabled(selectedBusiness.post_visit_coupon_enabled !== false);
-      setRemarketingEnabled(selectedBusiness.remarketing_enabled !== false);
-      setRemarketingInactiveDays(
-        String(Math.max(7, Number(selectedBusiness.remarketing_inactive_days || 30)))
-      );
-      setBirthdayCampaignEnabled(selectedBusiness.birthday_campaign_enabled !== false);
-      setAutoReturnEnabled(selectedBusiness.auto_return_enabled !== false);
-      setAutoReturnDays(String(Math.max(7, Number(selectedBusiness.auto_return_days || 30))));
-      setOneClickRescheduleEnabled(selectedBusiness.one_click_reschedule_enabled !== false);
-      setCheckinQrEnabled(selectedBusiness.checkin_qr_enabled !== false);
-      setAutoFeedbackEnabled(selectedBusiness.auto_feedback_enabled === true);
       setGoogleReviewsEnabled(selectedBusiness.google_reviews_enabled === true);
       setGoogleReviewsUrl(selectedBusiness.google_reviews_url || "");
       setPlanCode((selectedBusiness.subscription_plan_code || "free") as "free" | "pro" | "enterprise");
@@ -1980,16 +2430,8 @@ export default function HomePage() {
       );
       setPlanAutomationsEnabled(selectedBusiness.automations_enabled === true);
       setPlanMultiUnitEnabled(selectedBusiness.multi_unit_enabled === true);
-      setBookingRescheduleCutoffMinutes(
-        String(
-          Math.max(0, Number(selectedBusiness.booking_reschedule_cutoff_minutes || 0))
-        )
-      );
-      setBookingCancelCutoffMinutes(
-        String(Math.max(0, Number(selectedBusiness.booking_cancel_cutoff_minutes || 0)))
-      );
     }
-  }, [selectedBusinessId, businesses]);
+  }, [role, developerBusinessCreatingNew, selectedBusinessId, businesses]);
 
   useEffect(() => {
     if (role !== "owner") return;
@@ -2098,6 +2540,49 @@ export default function HomePage() {
   ]);
 
   useEffect(() => {
+    if (role !== "developer") return;
+    if (developerArea !== "dashboard") return;
+    if (dashboardArea === "overview") {
+      void loadSubscriptionChangeFeedbacks("all").catch((error: Error) => {
+        setSubscriptionChangeFeedbacksError(error.message);
+        setSubscriptionChangeFeedbacks([]);
+      });
+      return;
+    }
+    if (dashboardArea === "categories" && developerDashboardCategory === "subscriptions") {
+      void loadSubscriptionChangeFeedbacks(subscriptionFeedbackStatusFilter).catch((error: Error) => {
+        setSubscriptionChangeFeedbacksError(error.message);
+        setSubscriptionChangeFeedbacks([]);
+      });
+    }
+  }, [
+    role,
+    developerArea,
+    dashboardArea,
+    developerDashboardCategory,
+    subscriptionFeedbackStatusFilter,
+  ]);
+
+  useEffect(() => {
+    if (role !== "owner") return;
+    if (clientMainArea !== "dashboard" || clientDashboardArea !== "subscription") return;
+    if (!selectedBusinessId) return;
+    void loadOwnerSubscriptionFeedbacks(
+      selectedBusinessId,
+      ownerSubscriptionFeedbackStatusFilter
+    ).catch((error: Error) => {
+      setOwnerSubscriptionFeedbacksError(error.message);
+      setOwnerSubscriptionFeedbacks([]);
+    });
+  }, [
+    role,
+    clientMainArea,
+    clientDashboardArea,
+    selectedBusinessId,
+    ownerSubscriptionFeedbackStatusFilter,
+  ]);
+
+  useEffect(() => {
     if (role !== "owner") return;
     if (clientMainArea !== "dashboard" || clientDashboardArea !== "overview") return;
     if (!selectedBusinessId) return;
@@ -2129,8 +2614,122 @@ export default function HomePage() {
     void loadFinancialComparisons(selectedBusinessId, analyticsMonth);
   }, [role, clientMainArea, clientDashboardArea, selectedBusinessId, analyticsMonth]);
 
+  function toggleDeveloperBusinessFormSection(id: DeveloperBusinessFormSection) {
+    setDeveloperBusinessFormSection((prev) => (prev === id ? null : id));
+  }
+
+  function resetDeveloperBusinessFormForNew() {
+    setFeedback("");
+    setFeedbackType("");
+    setName("");
+    setBusinessType("");
+    setCnaeCode("");
+    setCnaeDescription("");
+    setCnpj("");
+    setLegalName("");
+    setTradeName("");
+    setAddressLine("");
+    setAddressNumber("");
+    setAddressComplement("");
+    setNeighborhood("");
+    setCity("");
+    setStateUf("");
+    setPostalCode("");
+    setContactName("");
+    setContactPhone("");
+    setContactEmail("");
+    setClientWhatsapp("");
+    setGoogleReviewsEnabled(false);
+    setGoogleReviewsUrl("");
+    setPlanCode("free");
+    setPlanStatus("active");
+    setPlanMonthlyLimit("");
+    setPlanProfessionalLimit("");
+    setPlanAutomationsEnabled(false);
+    setPlanMultiUnitEnabled(false);
+    setCalendarMode("internal");
+    setDeveloperBusinessFormSection("identificacao");
+    setCnpjLookupFeedback("");
+    setCnpjLookupPreview(null);
+    setCnpjApplySelection(DEFAULT_CNPJ_APPLY_SELECTION);
+    setCepFeedback("");
+    setLastFetchedCep("");
+  }
+
+  function restoreDeveloperBusinessContextAfterClosingNewModal() {
+    setDeveloperNewBusinessModalOpen(false);
+    setDeveloperBusinessModalMode("create");
+    setDeveloperBusinessCreatingNew(false);
+    setDeveloperBusinessRequiredFieldErrors({});
+    setCnpjLookupPreview(null);
+    setFeedback("");
+    setFeedbackType("");
+    const snap = businessIdBeforeNewModal;
+    setBusinessIdBeforeNewModal(null);
+    if (snap && businesses.some((b) => b.id === snap)) {
+      const b = businesses.find((x) => x.id === snap)!;
+      setSelectedBusinessId(snap);
+      setCalendarMode(b.calendar_mode || "internal");
+      setClientWhatsapp(formatMaskedFromDigits(b.whatsapp_number ?? "", maskPhoneBr));
+    } else if (businesses.length > 0) {
+      const first = businesses[0];
+      setSelectedBusinessId(first.id);
+      setCalendarMode(first.calendar_mode || "internal");
+      setClientWhatsapp(formatMaskedFromDigits(first.whatsapp_number ?? "", maskPhoneBr));
+    }
+  }
+
+  function handleDeveloperEmpresasOpenList() {
+    if (developerNewBusinessModalOpen) {
+      restoreDeveloperBusinessContextAfterClosingNewModal();
+      return;
+    }
+    setFeedback("");
+    setFeedbackType("");
+    if (!selectedBusinessId && businesses.length > 0) {
+      const first = businesses[0];
+      setSelectedBusinessId(first.id);
+      setCalendarMode(first.calendar_mode || "internal");
+      setClientWhatsapp(formatMaskedFromDigits(first.whatsapp_number ?? "", maskPhoneBr));
+    }
+  }
+
+  function handleDeveloperStartNewBusiness() {
+    setDeveloperBusinessModalMode("create");
+    setBusinessIdBeforeNewModal(selectedBusinessId || null);
+    setDeveloperBusinessRequiredFieldErrors({});
+    resetDeveloperBusinessFormForNew();
+    setDeveloperBusinessCreatingNew(true);
+    setSelectedBusinessId("");
+    setDeveloperNewBusinessModalOpen(true);
+  }
+
+  function handleDeveloperEditBusiness(row: DeveloperBusinessGridRow) {
+    setBusinessIdBeforeNewModal(selectedBusinessId || null);
+    setDeveloperBusinessModalMode("edit");
+    setDeveloperBusinessRequiredFieldErrors({});
+    setDeveloperBusinessCreatingNew(false);
+    setCnpjLookupPreview(null);
+    setFeedback("");
+    setFeedbackType("");
+    setSelectedBusinessId(row.id);
+    setDeveloperNewBusinessModalOpen(true);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const errs: Partial<Record<"name" | "cnaeCode", string>> = {};
+    if (!name.trim()) errs.name = "Informe o nome da empresa.";
+    if (!cnaeCode) errs.cnaeCode = "Selecione o ramo da empresa (CNAE).";
+    if (Object.keys(errs).length > 0) {
+      setDeveloperBusinessRequiredFieldErrors(errs);
+      return;
+    }
+    setDeveloperBusinessRequiredFieldErrors({});
+    if (developerBusinessModalMode === "edit") {
+      await handleUpdateBusinessProfile({ closeDeveloperBusinessModalOnSuccess: true });
+      return;
+    }
     setIsSaving(true);
     setFeedback("");
     setFeedbackType("");
@@ -2144,7 +2743,7 @@ export default function HomePage() {
         body: JSON.stringify({
           name,
           businessType,
-          timezone,
+          timezone: getBrowserIanaTimezone(),
           greetingTemplate,
           confirmationTemplate,
           calendarMode,
@@ -2164,34 +2763,6 @@ export default function HomePage() {
           cnaeCode,
           cnaeDescription,
           whatsappNumber: clientWhatsapp,
-          bookingBufferBeforeMinutes: Math.max(0, Number(bookingBufferBeforeMinutes) || 0),
-          bookingBufferAfterMinutes: Math.max(0, Number(bookingBufferAfterMinutes) || 0),
-          bookingMinNoticeMinutes: Math.max(0, Number(bookingMinNoticeMinutes) || 0),
-          bookingMaxDaysAhead: Math.max(1, Number(bookingMaxDaysAhead) || 60),
-          bookingDailyLimit: bookingDailyLimit.trim()
-            ? Math.max(1, Number(bookingDailyLimit) || 1)
-            : null,
-          bookingSlotCapacity: Math.max(1, Number(bookingSlotCapacity) || 1),
-          waitlistEnabled,
-          reminder24hEnabled,
-          reminder2hEnabled,
-          reminder30mEnabled,
-          attendanceConfirmationRequired,
-          attendanceConfirmationDeadlineMinutes: Math.max(
-            60,
-            Number(attendanceConfirmationDeadlineMinutes) || 1440
-          ),
-          autoReleaseUnconfirmed,
-          postVisitThankYouEnabled,
-          postVisitCouponEnabled,
-          remarketingEnabled,
-          remarketingInactiveDays: Math.max(7, Number(remarketingInactiveDays) || 30),
-          birthdayCampaignEnabled,
-          autoReturnEnabled,
-          autoReturnDays: Math.max(7, Number(autoReturnDays) || 30),
-          oneClickRescheduleEnabled,
-          checkinQrEnabled,
-          autoFeedbackEnabled,
           googleReviewsEnabled,
           googleReviewsUrl: googleReviewsUrl.trim() || null,
           subscriptionPlanCode: planCode,
@@ -2203,21 +2774,14 @@ export default function HomePage() {
             ? Math.max(1, Number(planProfessionalLimit) || 1)
             : null,
           automationsEnabled: planAutomationsEnabled,
-          multiUnitEnabled: planMultiUnitEnabled,
-          bookingRescheduleCutoffMinutes: Math.max(
-            0,
-            Number(bookingRescheduleCutoffMinutes) || 0
-          ),
-          bookingCancelCutoffMinutes: Math.max(
-            0,
-            Number(bookingCancelCutoffMinutes) || 0
-          )
+          multiUnitEnabled: planMultiUnitEnabled
         })
       });
 
       const result = (await response.json()) as {
         message?: string;
         error?: string;
+        business?: BusinessRow;
       };
 
       if (!response.ok) {
@@ -2226,45 +2790,20 @@ export default function HomePage() {
 
       setFeedback(result.message || "Configuracao salva com sucesso.");
       setFeedbackType("success");
-      setName("");
-      setBusinessType("");
-      setCnaeCode("");
-      setCnaeDescription("");
-      setCnpj("");
-      setLegalName("");
-      setTradeName("");
-      setAddressLine("");
-      setAddressNumber("");
-      setAddressComplement("");
-      setNeighborhood("");
-      setCity("");
-      setStateUf("");
-      setPostalCode("");
-      setContactName("");
-      setContactPhone("");
-      setContactEmail("");
-      setClientWhatsapp("");
-      setBookingBufferBeforeMinutes("0");
-      setBookingBufferAfterMinutes("0");
-      setBookingMinNoticeMinutes("0");
-      setBookingMaxDaysAhead("60");
-      setBookingDailyLimit("");
-      setBookingSlotCapacity("1");
-      setWaitlistEnabled(true);
-      setReminder24hEnabled(true);
-      setReminder2hEnabled(true);
-      setReminder30mEnabled(true);
-      setAttendanceConfirmationRequired(true);
-      setAttendanceConfirmationDeadlineMinutes("1440");
-      setAutoReleaseUnconfirmed(true);
-      setPostVisitThankYouEnabled(true);
-      setPostVisitCouponEnabled(true);
-      setRemarketingEnabled(true);
-      setRemarketingInactiveDays("30");
-      setBirthdayCampaignEnabled(true);
-      setBookingRescheduleCutoffMinutes("0");
-      setBookingCancelCutoffMinutes("0");
+      const created = result.business;
+      if (created?.id) {
+        setSelectedBusinessId(created.id);
+      }
+      if (role === "developer") {
+        setDeveloperNewBusinessModalOpen(false);
+        setDeveloperBusinessModalMode("create");
+        setBusinessIdBeforeNewModal(null);
+        setDeveloperBusinessCreatingNew(false);
+      }
       await loadBusinesses();
+      if (role === "developer") {
+        void loadDeveloperPlatformSummary({ quiet: true });
+      }
     } catch (error) {
       setFeedback((error as Error).message);
       setFeedbackType("error");
@@ -2277,7 +2816,7 @@ export default function HomePage() {
     setServiceFeedback("");
 
     if (!selectedBusinessId) {
-      setServiceFeedback("Selecione um negocio para cadastrar servicos.");
+      setServiceFeedback("Selecione uma empresa para cadastrar servicos.");
       return false;
     }
 
@@ -2300,7 +2839,40 @@ export default function HomePage() {
         icon: serviceIcon,
         color: serviceColor,
         imageUrls: serviceImages,
-        displayOrder: services.length
+        displayOrder: services.length,
+        bookingBufferBeforeMinutes: Math.max(0, Number(serviceBookingBufferBefore) || 0),
+        bookingBufferAfterMinutes: Math.max(0, Number(serviceBookingBufferAfter) || 0),
+        bookingMinNoticeMinutes: Math.max(0, Number(serviceBookingMinNotice) || 0),
+        bookingMaxDaysAhead: Math.max(1, Number(serviceBookingMaxDays) || 60),
+        bookingDailyLimit: serviceBookingDailyLimit.trim()
+          ? Math.max(1, Number(serviceBookingDailyLimit) || 1)
+          : null,
+        bookingSlotCapacity: Math.max(1, Number(serviceBookingSlotCapacity) || 1),
+        waitlistEnabled: serviceWaitlistEnabled,
+        reminder24hEnabled: serviceReminder24h,
+        reminder2hEnabled: serviceReminder2h,
+        reminder30mEnabled: serviceReminder30m,
+        attendanceConfirmationRequired: serviceAttendanceRequired,
+        attendanceConfirmationDeadlineMinutes: Math.max(
+          60,
+          Number(serviceAttendanceDeadline) || 1440
+        ),
+        autoReleaseUnconfirmed: serviceAutoRelease,
+        bookingRescheduleCutoffMinutes: Math.max(0, Number(serviceRescheduleCutoff) || 0),
+        bookingCancelCutoffMinutes: Math.max(0, Number(serviceCancelCutoff) || 0),
+        postVisitThankYouEnabled: servicePostVisitThankYou,
+        postVisitCouponEnabled: servicePostVisitCoupon,
+        remarketingEnabled: serviceRemarketing,
+        remarketingInactiveDays: Math.max(
+          7,
+          Number(serviceRemarketingInactiveDays) || 30
+        ),
+        birthdayCampaignEnabled: serviceBirthday,
+        autoReturnEnabled: serviceAutoReturn,
+        autoReturnDays: Math.max(7, Number(serviceAutoReturnDays) || 30),
+        oneClickRescheduleEnabled: serviceOneClickReschedule,
+        checkinQrEnabled: serviceCheckinQr,
+        autoFeedbackEnabled: serviceAutoFeedback
       })
     });
 
@@ -2318,14 +2890,10 @@ export default function HomePage() {
     setServiceImages([]);
     setServiceDuration("30");
     setServicePrice("");
+    applyBusinessTemplateToServiceAgendaCreate(selectedBusinessId);
     setServiceFeedback(result.message || "Servico criado.");
     await loadServices(selectedBusinessId);
     return true;
-  }
-
-  async function handleCreateService(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await createServiceFromState();
   }
 
   async function handleUploadServiceImages(
@@ -2334,7 +2902,7 @@ export default function HomePage() {
   ) {
     if (!files || files.length === 0) return;
     if (!selectedBusinessId) {
-      setServiceFeedback("Selecione um negocio antes de enviar imagens.");
+      setServiceFeedback("Selecione uma empresa antes de enviar imagens.");
       return;
     }
     const current = mode === "new" ? serviceImages : editingImages;
@@ -2401,7 +2969,7 @@ export default function HomePage() {
 
   async function handleApplyServiceTemplate() {
     if (!selectedBusinessId) {
-      setServiceFeedback("Selecione um negocio antes de aplicar templates.");
+      setServiceFeedback("Selecione uma empresa antes de aplicar templates.");
       return;
     }
     const list = serviceTemplatePreviewItems.filter((item) => item.selected);
@@ -2439,7 +3007,7 @@ export default function HomePage() {
     }
   }
 
-  async function handleDeleteService(serviceId: string) {
+  async function handleDeleteService(serviceId: string): Promise<boolean> {
     const response = await fetch(`/api/services/${serviceId}`, {
       method: "DELETE"
     });
@@ -2447,11 +3015,62 @@ export default function HomePage() {
     const result = (await response.json()) as { error?: string; message?: string };
     if (!response.ok) {
       setServiceFeedback(result.error || "Erro ao excluir servico.");
-      return;
+      return false;
     }
 
     setServiceFeedback(result.message || "Servico removido.");
     await loadServices(selectedBusinessId);
+    return true;
+  }
+
+  async function handleDeleteEditingService() {
+    if (!editingServiceId) return;
+    if (
+      !window.confirm(
+        "Excluir este serviço? O cadastro sai do catálogo; confirme se não há impacto em agendamentos ou integrações."
+      )
+    ) {
+      return;
+    }
+    const ok = await handleDeleteService(editingServiceId);
+    if (ok) closeServiceModal();
+  }
+
+  function applyBusinessTemplateToServiceAgendaCreate(businessId: string) {
+    const b = businesses.find((x) => x.id === businessId);
+    setServiceBookingBufferBefore(String(Math.max(0, Number(b?.booking_buffer_before_minutes ?? 0))));
+    setServiceBookingBufferAfter(String(Math.max(0, Number(b?.booking_buffer_after_minutes ?? 0))));
+    setServiceBookingMinNotice(String(Math.max(0, Number(b?.booking_min_notice_minutes ?? 0))));
+    setServiceBookingMaxDays(String(Math.max(1, Number(b?.booking_max_days_ahead ?? 60))));
+    setServiceBookingDailyLimit(
+      b?.booking_daily_limit != null ? String(b.booking_daily_limit) : ""
+    );
+    setServiceBookingSlotCapacity(String(Math.max(1, Number(b?.booking_slot_capacity ?? 1))));
+    setServiceWaitlistEnabled(b?.waitlist_enabled !== false);
+    setServiceReminder24h(b?.reminder_24h_enabled !== false);
+    setServiceReminder2h(b?.reminder_2h_enabled !== false);
+    setServiceReminder30m(b?.reminder_30m_enabled !== false);
+    setServiceAttendanceRequired(b?.attendance_confirmation_required !== false);
+    setServiceAttendanceDeadline(
+      String(Math.max(60, Number(b?.attendance_confirmation_deadline_minutes ?? 1440)))
+    );
+    setServiceAutoRelease(b?.auto_release_unconfirmed !== false);
+    setServiceRescheduleCutoff(
+      String(Math.max(0, Number(b?.booking_reschedule_cutoff_minutes ?? 0)))
+    );
+    setServiceCancelCutoff(String(Math.max(0, Number(b?.booking_cancel_cutoff_minutes ?? 0))));
+    setServicePostVisitThankYou(b?.post_visit_thank_you_enabled !== false);
+    setServicePostVisitCoupon(b?.post_visit_coupon_enabled !== false);
+    setServiceRemarketing(b?.remarketing_enabled !== false);
+    setServiceRemarketingInactiveDays(
+      String(Math.max(7, Number(b?.remarketing_inactive_days ?? 30)))
+    );
+    setServiceBirthday(b?.birthday_campaign_enabled !== false);
+    setServiceAutoReturn(b?.auto_return_enabled !== false);
+    setServiceAutoReturnDays(String(Math.max(7, Number(b?.auto_return_days ?? 30))));
+    setServiceOneClickReschedule(b?.one_click_reschedule_enabled !== false);
+    setServiceCheckinQr(b?.checkin_qr_enabled !== false);
+    setServiceAutoFeedback(b?.auto_feedback_enabled === true);
   }
 
   function startEditingService(service: ServiceItem) {
@@ -2468,10 +3087,50 @@ export default function HomePage() {
         ? (service.price_cents / 100).toFixed(2)
         : ""
     );
+    setEditingBookingBufferBefore(
+      String(Math.max(0, Number(service.booking_buffer_before_minutes ?? 0)))
+    );
+    setEditingBookingBufferAfter(
+      String(Math.max(0, Number(service.booking_buffer_after_minutes ?? 0)))
+    );
+    setEditingBookingMinNotice(String(Math.max(0, Number(service.booking_min_notice_minutes ?? 0))));
+    setEditingBookingMaxDays(String(Math.max(1, Number(service.booking_max_days_ahead ?? 60))));
+    setEditingBookingDailyLimit(
+      service.booking_daily_limit != null ? String(service.booking_daily_limit) : ""
+    );
+    setEditingBookingSlotCapacity(
+      String(Math.max(1, Number(service.booking_slot_capacity ?? 1)))
+    );
+    setEditingWaitlistEnabled(service.waitlist_enabled !== false);
+    setEditingReminder24h(service.reminder_24h_enabled !== false);
+    setEditingReminder2h(service.reminder_2h_enabled !== false);
+    setEditingReminder30m(service.reminder_30m_enabled !== false);
+    setEditingAttendanceRequired(service.attendance_confirmation_required !== false);
+    setEditingAttendanceDeadline(
+      String(Math.max(60, Number(service.attendance_confirmation_deadline_minutes ?? 1440)))
+    );
+    setEditingAutoRelease(service.auto_release_unconfirmed !== false);
+    setEditingRescheduleCutoff(
+      String(Math.max(0, Number(service.booking_reschedule_cutoff_minutes ?? 0)))
+    );
+    setEditingCancelCutoff(String(Math.max(0, Number(service.booking_cancel_cutoff_minutes ?? 0))));
+    setEditingPostVisitThankYou(service.post_visit_thank_you_enabled !== false);
+    setEditingPostVisitCoupon(service.post_visit_coupon_enabled !== false);
+    setEditingRemarketing(service.remarketing_enabled !== false);
+    setEditingRemarketingInactiveDays(
+      String(Math.max(7, Number(service.remarketing_inactive_days ?? 30)))
+    );
+    setEditingBirthday(service.birthday_campaign_enabled !== false);
+    setEditingAutoReturn(service.auto_return_enabled !== false);
+    setEditingAutoReturnDays(String(Math.max(7, Number(service.auto_return_days ?? 30))));
+    setEditingOneClickReschedule(service.one_click_reschedule_enabled !== false);
+    setEditingCheckinQr(service.checkin_qr_enabled !== false);
+    setEditingAutoFeedback(service.auto_feedback_enabled === true);
     setServiceFeedback("");
   }
 
   function openCreateServiceModal() {
+    applyBusinessTemplateToServiceAgendaCreate(selectedBusinessId);
     setServiceModalMode("create");
     setServiceModalTab("info");
     setServiceModalOpen(true);
@@ -2501,6 +3160,31 @@ export default function HomePage() {
     setEditingImages([]);
     setEditingDuration("30");
     setEditingPrice("");
+    setEditingBookingBufferBefore("0");
+    setEditingBookingBufferAfter("0");
+    setEditingBookingMinNotice("0");
+    setEditingBookingMaxDays("60");
+    setEditingBookingDailyLimit("");
+    setEditingBookingSlotCapacity("1");
+    setEditingWaitlistEnabled(true);
+    setEditingReminder24h(true);
+    setEditingReminder2h(true);
+    setEditingReminder30m(true);
+    setEditingAttendanceRequired(true);
+    setEditingAttendanceDeadline("1440");
+    setEditingAutoRelease(true);
+    setEditingRescheduleCutoff("0");
+    setEditingCancelCutoff("0");
+    setEditingPostVisitThankYou(true);
+    setEditingPostVisitCoupon(true);
+    setEditingRemarketing(true);
+    setEditingRemarketingInactiveDays("30");
+    setEditingBirthday(true);
+    setEditingAutoReturn(true);
+    setEditingAutoReturnDays("30");
+    setEditingOneClickReschedule(true);
+    setEditingCheckinQr(true);
+    setEditingAutoFeedback(false);
   }
 
   async function handleToggleServiceActive(service: ServiceItem) {
@@ -2536,7 +3220,50 @@ export default function HomePage() {
         color: service.color || "#3B82F6",
         imageUrls: service.image_urls || [],
         isActive: service.is_active,
-        displayOrder: services.length
+        displayOrder: services.length,
+        bookingBufferBeforeMinutes: Math.max(
+          0,
+          Number(service.booking_buffer_before_minutes ?? 0)
+        ),
+        bookingBufferAfterMinutes: Math.max(
+          0,
+          Number(service.booking_buffer_after_minutes ?? 0)
+        ),
+        bookingMinNoticeMinutes: Math.max(
+          0,
+          Number(service.booking_min_notice_minutes ?? 0)
+        ),
+        bookingMaxDaysAhead: Math.max(1, Number(service.booking_max_days_ahead ?? 60)),
+        bookingDailyLimit: service.booking_daily_limit,
+        bookingSlotCapacity: Math.max(1, Number(service.booking_slot_capacity ?? 1)),
+        waitlistEnabled: service.waitlist_enabled !== false,
+        reminder24hEnabled: service.reminder_24h_enabled !== false,
+        reminder2hEnabled: service.reminder_2h_enabled !== false,
+        reminder30mEnabled: service.reminder_30m_enabled !== false,
+        attendanceConfirmationRequired: service.attendance_confirmation_required !== false,
+        attendanceConfirmationDeadlineMinutes: Math.max(
+          60,
+          Number(service.attendance_confirmation_deadline_minutes ?? 1440)
+        ),
+        autoReleaseUnconfirmed: service.auto_release_unconfirmed !== false,
+        bookingRescheduleCutoffMinutes: Math.max(
+          0,
+          Number(service.booking_reschedule_cutoff_minutes ?? 0)
+        ),
+        bookingCancelCutoffMinutes: Math.max(
+          0,
+          Number(service.booking_cancel_cutoff_minutes ?? 0)
+        ),
+        postVisitThankYouEnabled: service.post_visit_thank_you_enabled !== false,
+        postVisitCouponEnabled: service.post_visit_coupon_enabled !== false,
+        remarketingEnabled: service.remarketing_enabled !== false,
+        remarketingInactiveDays: Math.max(7, Number(service.remarketing_inactive_days ?? 30)),
+        birthdayCampaignEnabled: service.birthday_campaign_enabled !== false,
+        autoReturnEnabled: service.auto_return_enabled !== false,
+        autoReturnDays: Math.max(7, Number(service.auto_return_days ?? 30)),
+        oneClickRescheduleEnabled: service.one_click_reschedule_enabled !== false,
+        checkinQrEnabled: service.checkin_qr_enabled !== false,
+        autoFeedbackEnabled: service.auto_feedback_enabled === true
       })
     });
     const result = (await response.json()) as { error?: string; message?: string };
@@ -2562,7 +3289,7 @@ export default function HomePage() {
   }
 
   async function handleMoveService(service: ServiceItem, direction: -1 | 1) {
-    const visible = [...filteredServices];
+    const visible = [...services];
     const currentIndex = visible.findIndex((s) => s.id === service.id);
     const targetIndex = currentIndex + direction;
     if (currentIndex < 0 || targetIndex < 0 || targetIndex >= visible.length) {
@@ -2573,21 +3300,6 @@ export default function HomePage() {
     moved.splice(targetIndex, 0, item);
     try {
       await persistServicesOrder(moved);
-    } catch {
-      setServiceFeedback("Erro ao reordenar servicos.");
-    }
-  }
-
-  async function handleDropReorderService(sourceId: string, targetId: string) {
-    if (!sourceId || !targetId || sourceId === targetId) return;
-    const ordered = [...filteredServices];
-    const from = ordered.findIndex((s) => s.id === sourceId);
-    const to = ordered.findIndex((s) => s.id === targetId);
-    if (from < 0 || to < 0) return;
-    const [item] = ordered.splice(from, 1);
-    ordered.splice(to, 0, item);
-    try {
-      await persistServicesOrder(ordered);
     } catch {
       setServiceFeedback("Erro ao reordenar servicos.");
     }
@@ -2615,7 +3327,40 @@ export default function HomePage() {
         description: editingDescription || null,
         icon: editingIcon,
         color: editingColor,
-        imageUrls: editingImages
+        imageUrls: editingImages,
+        bookingBufferBeforeMinutes: Math.max(0, Number(editingBookingBufferBefore) || 0),
+        bookingBufferAfterMinutes: Math.max(0, Number(editingBookingBufferAfter) || 0),
+        bookingMinNoticeMinutes: Math.max(0, Number(editingBookingMinNotice) || 0),
+        bookingMaxDaysAhead: Math.max(1, Number(editingBookingMaxDays) || 60),
+        bookingDailyLimit: editingBookingDailyLimit.trim()
+          ? Math.max(1, Number(editingBookingDailyLimit) || 1)
+          : null,
+        bookingSlotCapacity: Math.max(1, Number(editingBookingSlotCapacity) || 1),
+        waitlistEnabled: editingWaitlistEnabled,
+        reminder24hEnabled: editingReminder24h,
+        reminder2hEnabled: editingReminder2h,
+        reminder30mEnabled: editingReminder30m,
+        attendanceConfirmationRequired: editingAttendanceRequired,
+        attendanceConfirmationDeadlineMinutes: Math.max(
+          60,
+          Number(editingAttendanceDeadline) || 1440
+        ),
+        autoReleaseUnconfirmed: editingAutoRelease,
+        bookingRescheduleCutoffMinutes: Math.max(0, Number(editingRescheduleCutoff) || 0),
+        bookingCancelCutoffMinutes: Math.max(0, Number(editingCancelCutoff) || 0),
+        postVisitThankYouEnabled: editingPostVisitThankYou,
+        postVisitCouponEnabled: editingPostVisitCoupon,
+        remarketingEnabled: editingRemarketing,
+        remarketingInactiveDays: Math.max(
+          7,
+          Number(editingRemarketingInactiveDays) || 30
+        ),
+        birthdayCampaignEnabled: editingBirthday,
+        autoReturnEnabled: editingAutoReturn,
+        autoReturnDays: Math.max(7, Number(editingAutoReturnDays) || 30),
+        oneClickRescheduleEnabled: editingOneClickReschedule,
+        checkinQrEnabled: editingCheckinQr,
+        autoFeedbackEnabled: editingAutoFeedback
       })
     });
 
@@ -2631,16 +3376,11 @@ export default function HomePage() {
     return true;
   }
 
-  async function handleUpdateService(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    await updateServiceFromState();
-  }
-
   async function handleSaveMessageTemplates(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMessageTemplateFeedback("");
     if (!selectedBusinessId) {
-      setMessageTemplateFeedback("Selecione um negocio para salvar os templates.");
+      setMessageTemplateFeedback("Selecione uma empresa para salvar os templates.");
       return;
     }
 
@@ -2745,7 +3485,7 @@ export default function HomePage() {
     event.preventDefault();
     setOfferFeedback("");
     if (!selectedBusinessId) {
-      setOfferFeedback("Selecione um negocio para cadastrar planos/pacotes.");
+      setOfferFeedback("Selecione uma empresa para cadastrar planos/pacotes.");
       return;
     }
     const priceCents = Math.max(0, Math.round((Number(offerPrice) || 0) * 100));
@@ -2810,7 +3550,7 @@ export default function HomePage() {
     setCalendarFeedback("");
 
     if (!selectedBusinessId) {
-      setCalendarFeedback("Selecione um negocio para configurar o calendario.");
+      setCalendarFeedback("Selecione uma empresa para configurar o calendario.");
       return;
     }
 
@@ -2848,7 +3588,7 @@ export default function HomePage() {
       return;
     }
     if (!selectedBusinessId) {
-      setCalendarFeedback("Selecione um negocio antes de conectar o Google.");
+      setCalendarFeedback("Selecione uma empresa antes de conectar o Google.");
       return;
     }
 
@@ -2860,7 +3600,7 @@ export default function HomePage() {
 
   async function handleCalendarModeSave() {
     if (!selectedBusinessId) {
-      setCalendarFeedback("Selecione um negocio para definir o modo de agenda.");
+      setCalendarFeedback("Selecione uma empresa para definir o modo de agenda.");
       return;
     }
 
@@ -2876,6 +3616,9 @@ export default function HomePage() {
     }
     setCalendarFeedback(result.message || "Modo de agenda atualizado.");
     await loadBusinesses();
+    if (role === "developer") {
+      void loadDeveloperPlatformSummary({ quiet: true });
+    }
   }
 
   function updateBusinessHour(
@@ -2887,45 +3630,179 @@ export default function HomePage() {
     );
   }
 
-  async function handleSaveBusinessHours(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setHoursFeedback("");
+  function updateDayShift(
+    weekday: number,
+    shiftId: string,
+    patch: Partial<Pick<BusinessDayShift, "startTime" | "endTime">>
+  ) {
+    setBusinessHours((prev) =>
+      prev.map((item) => {
+        if (item.weekday !== weekday) return item;
+        return {
+          ...item,
+          shifts: item.shifts.map((s) => (s.id === shiftId ? { ...s, ...patch } : s))
+        };
+      })
+    );
+  }
+
+  function addDayShift(weekday: number) {
+    setBusinessHours((prev) =>
+      prev.map((item) => {
+        if (item.weekday !== weekday) return item;
+        const last = item.shifts[item.shifts.length - 1];
+        const start = last?.endTime ?? "13:00";
+        return {
+          ...item,
+          shifts: [
+            ...item.shifts,
+            { id: newShiftClientId(), startTime: start, endTime: "18:00" }
+          ]
+        };
+      })
+    );
+  }
+
+  function removeDayShift(weekday: number, shiftId: string) {
+    setBusinessHours((prev) =>
+      prev.map((item) => {
+        if (item.weekday !== weekday) return item;
+        if (item.shifts.length <= 1) return item;
+        return { ...item, shifts: item.shifts.filter((s) => s.id !== shiftId) };
+      })
+    );
+  }
+
+  function startNewHourScheduleDraft() {
+    setHourScheduleId(null);
+    setHourValidityType("indeterminate");
+    setHourCustomFrom("");
+    setHourCustomTo("");
+    setBusinessHours(
+      weekDaysSchedule.map((day) => ({
+        weekday: day.id,
+        isActive: day.id >= 1 && day.id <= 5,
+        shifts: [createDefaultShift()]
+      }))
+    );
+  }
+
+  function closeHourScheduleModal() {
+    setHourScheduleModalOpen(false);
+    setHourScheduleOverlapPrompt(null);
+    if (selectedBusinessId) {
+      void loadBusinessHours(selectedBusinessId).catch(() => {});
+    }
+  }
+
+  function openHourScheduleModalCreate() {
     if (!selectedBusinessId) {
-      setHoursFeedback("Selecione um negocio para definir os horarios.");
+      setHoursFeedback("Selecione uma empresa para definir os horarios.");
       return;
     }
+    setHoursFeedback("");
+    startNewHourScheduleDraft();
+    setHourScheduleModalMode("create");
+    setHourScheduleModalOpen(true);
+  }
+
+  async function openHourScheduleModalEdit(row: HourScheduleGridRow) {
+    if (!selectedBusinessId) {
+      return;
+    }
+    setHoursFeedback("");
+    try {
+      await loadBusinessHours(selectedBusinessId, { scheduleId: row.id });
+      setHourScheduleModalMode("edit");
+      setHourScheduleModalOpen(true);
+    } catch (error) {
+      setHoursFeedback((error as Error).message);
+    }
+  }
+
+  async function submitBusinessHoursSave(confirmOverlapResolution: boolean) {
+    setHoursFeedback("");
+    if (!selectedBusinessId) {
+      setHoursFeedback("Selecione uma empresa para definir os horarios.");
+      return;
+    }
+
+    const payload = {
+      businessId: selectedBusinessId,
+      ...(hourScheduleId ? { scheduleId: hourScheduleId } : {}),
+      validityType: hourValidityType,
+      ...(hourValidityType === "custom"
+        ? { customValidFrom: hourCustomFrom, customValidTo: hourCustomTo }
+        : {}),
+      confirmOverlapResolution,
+      hours: businessHours.map((item) => ({
+        weekday: item.weekday,
+        isActive: item.isActive,
+        shifts: item.isActive
+          ? item.shifts.map((s) => ({
+              startTime: `${s.startTime}:00`,
+              endTime: `${s.endTime}:00`
+            }))
+          : [{ startTime: "09:00:00", endTime: "18:00:00" }]
+      }))
+    };
 
     const response = await fetch("/api/business-hours", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        businessId: selectedBusinessId,
-        hours: businessHours.map((item) => ({
-          weekday: item.weekday,
-          isActive: item.isActive,
-          startTime: `${item.startTime}:00`,
-          endTime: `${item.endTime}:00`,
-          lunchStartTime:
-            item.isActive && item.hasLunchBreak ? `${item.lunchStartTime}:00` : null,
-          lunchEndTime:
-            item.isActive && item.hasLunchBreak ? `${item.lunchEndTime}:00` : null
-        }))
-      })
+      body: JSON.stringify(payload)
     });
 
-    const result = (await response.json()) as { error?: string; message?: string };
+    const result = (await response.json()) as {
+      error?: string;
+      message?: string;
+      scheduleId?: string;
+      overlapConflict?: boolean;
+      overlapping?: Array<{
+        id: string;
+        validityType: string;
+        validFrom: string;
+        validTo: string | null;
+      }>;
+    };
+
+    if (response.status === 409 && result.overlapConflict) {
+      setHourScheduleOverlapPrompt({
+        message:
+          result.message ||
+          "Este periodo cruza vigencias de outras agendas. Confirme para ajustar as agendas afetadas.",
+        overlapping: result.overlapping || []
+      });
+      return;
+    }
+
     if (!response.ok) {
       setHoursFeedback(result.error || "Erro ao salvar horarios.");
       return;
     }
 
+    setHourScheduleOverlapPrompt(null);
     setHoursFeedback(result.message || "Horarios salvos com sucesso.");
-    await loadBusinessHours(selectedBusinessId);
+    setHourScheduleModalOpen(false);
+    await loadBusinessHourSchedules(selectedBusinessId);
+    if (result.scheduleId) {
+      await loadBusinessHours(selectedBusinessId, { scheduleId: result.scheduleId });
+    } else {
+      await loadBusinessHours(selectedBusinessId);
+    }
   }
 
-  async function handleUpdateBusinessProfile() {
+  async function handleSaveBusinessHours(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setHourScheduleOverlapPrompt(null);
+    await submitBusinessHoursSave(false);
+  }
+
+  async function handleUpdateBusinessProfile(options?: {
+    closeDeveloperBusinessModalOnSuccess?: boolean;
+  }) {
     if (!selectedBusinessId) {
-      setFeedback("Selecione um negocio para atualizar.");
+      setFeedback("Selecione uma empresa para atualizar.");
       setFeedbackType("error");
       return;
     }
@@ -2938,7 +3815,7 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          timezone,
+          timezone: getBrowserIanaTimezone(),
           calendarMode,
           cnpj,
           legalName,
@@ -2956,34 +3833,6 @@ export default function HomePage() {
           cnaeCode,
           cnaeDescription,
           whatsappNumber: clientWhatsapp,
-          bookingBufferBeforeMinutes: Math.max(0, Number(bookingBufferBeforeMinutes) || 0),
-          bookingBufferAfterMinutes: Math.max(0, Number(bookingBufferAfterMinutes) || 0),
-          bookingMinNoticeMinutes: Math.max(0, Number(bookingMinNoticeMinutes) || 0),
-          bookingMaxDaysAhead: Math.max(1, Number(bookingMaxDaysAhead) || 60),
-          bookingDailyLimit: bookingDailyLimit.trim()
-            ? Math.max(1, Number(bookingDailyLimit) || 1)
-            : null,
-          bookingSlotCapacity: Math.max(1, Number(bookingSlotCapacity) || 1),
-          waitlistEnabled,
-          reminder24hEnabled,
-          reminder2hEnabled,
-          reminder30mEnabled,
-          attendanceConfirmationRequired,
-          attendanceConfirmationDeadlineMinutes: Math.max(
-            60,
-            Number(attendanceConfirmationDeadlineMinutes) || 1440
-          ),
-          autoReleaseUnconfirmed,
-          postVisitThankYouEnabled,
-          postVisitCouponEnabled,
-          remarketingEnabled,
-          remarketingInactiveDays: Math.max(7, Number(remarketingInactiveDays) || 30),
-          birthdayCampaignEnabled,
-          autoReturnEnabled,
-          autoReturnDays: Math.max(7, Number(autoReturnDays) || 30),
-          oneClickRescheduleEnabled,
-          checkinQrEnabled,
-          autoFeedbackEnabled,
           googleReviewsEnabled,
           googleReviewsUrl: googleReviewsUrl.trim() || null,
           subscriptionPlanCode: planCode,
@@ -2995,15 +3844,7 @@ export default function HomePage() {
             ? Math.max(1, Number(planProfessionalLimit) || 1)
             : null,
           automationsEnabled: planAutomationsEnabled,
-          multiUnitEnabled: planMultiUnitEnabled,
-          bookingRescheduleCutoffMinutes: Math.max(
-            0,
-            Number(bookingRescheduleCutoffMinutes) || 0
-          ),
-          bookingCancelCutoffMinutes: Math.max(
-            0,
-            Number(bookingCancelCutoffMinutes) || 0
-          )
+          multiUnitEnabled: planMultiUnitEnabled
         })
       });
 
@@ -3014,6 +3855,11 @@ export default function HomePage() {
       setFeedback(result.message || "Cadastro atualizado com sucesso.");
       setFeedbackType("success");
       await loadBusinesses();
+      if (role === "developer" && options?.closeDeveloperBusinessModalOnSuccess) {
+        setDeveloperNewBusinessModalOpen(false);
+        setDeveloperBusinessModalMode("create");
+        setBusinessIdBeforeNewModal(null);
+      }
     } catch (error) {
       setFeedback((error as Error).message);
       setFeedbackType("error");
@@ -3238,15 +4084,558 @@ export default function HomePage() {
     );
   }
 
-  const totalBusinesses = businesses.length;
   const selectedBusiness = businesses.find((business) => business.id === selectedBusinessId);
+  const developerMetricsByBusiness = developerPlatformSummary?.byBusiness ?? [];
+  const developerRowsRegistered = developerMetricsByBusiness.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: 1
+  }));
+  const developerRowsInternal = developerMetricsByBusiness
+    .filter((b) => b.calendarMode !== "google")
+    .map((b) => ({ id: b.id, name: b.name, slug: b.slug, value: 1 }));
+  const developerRowsGoogle = developerMetricsByBusiness
+    .filter((b) => b.calendarMode === "google")
+    .map((b) => ({ id: b.id, name: b.name, slug: b.slug, value: 1 }));
+  const developerRowsCustomers = developerMetricsByBusiness.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: b.customerCount
+  }));
+  const developerRowsServices = developerMetricsByBusiness.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: b.serviceCount
+  }));
+  const developerRowsAppointments = developerMetricsByBusiness.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: b.appointmentCount
+  }));
+  const severityOrder: Record<"critical" | "warning" | "ok", number> = {
+    critical: 0,
+    warning: 1,
+    ok: 2
+  };
+  const developerRowsMonth = [...developerMetricsByBusiness]
+    .map((b) => {
+      const n = b.appointmentsThisMonth;
+      const severity: "critical" | "warning" | "ok" =
+        n === 0 ? "critical" : n <= 5 ? "warning" : "ok";
+      return {
+        id: b.id,
+        name: b.name,
+        slug: b.slug,
+        value: n,
+        severity
+      };
+    })
+    .sort((a, b) => {
+      if (severityOrder[a.severity] !== severityOrder[b.severity]) {
+        return severityOrder[a.severity] - severityOrder[b.severity];
+      }
+      return Number(a.value) - Number(b.value);
+    });
+  const developerRowsUpcoming = developerMetricsByBusiness.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: b.upcomingAppointmentCount
+  }));
+  const metricsByBusinessId = new Map(
+    developerMetricsByBusiness.map((item) => [item.id, item] as const)
+  );
+  const pendingRequestCountByBusinessId = subscriptionChangeFeedbacks.reduce<Map<string, number>>(
+    (acc, item) => {
+      const key = item.businessId;
+      const next = (acc.get(key) || 0) + (item.status === "pending" ? 1 : 0);
+      acc.set(key, next);
+      return acc;
+    },
+    new Map<string, number>()
+  );
+  const developerRowsOperationalUrgencies = businesses
+    .map((b) => {
+      const metrics = metricsByBusinessId.get(b.id);
+      const hasWhatsapp = digitsOnly(b.whatsapp_number || "").length >= 12;
+      const hasGoogle = b.calendar_mode === "google";
+      const hasServices = Number(metrics?.serviceCount || 0) > 0;
+      const hasCustomers = Number(metrics?.customerCount || 0) > 0;
+      const pendingCount = Number(!hasWhatsapp) + Number(!hasGoogle) + Number(!hasServices) + Number(!hasCustomers);
+      const severity: "critical" | "warning" =
+        pendingCount >= 3 || !hasWhatsapp ? "critical" : "warning";
+      return {
+        id: b.id,
+        name: b.name,
+        slug: b.slug,
+        pendingCount,
+        severity,
+      };
+    })
+    .filter((item) => item.pendingCount > 0)
+    .sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "critical" ? -1 : 1;
+      return b.pendingCount - a.pendingCount;
+    })
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      slug: item.slug,
+      value: `${item.pendingCount} pend.`,
+      severity: item.severity,
+    }));
+  const developerRowsCommunicationCenter = businesses
+    .map((b) => {
+      const hasWhatsapp = digitsOnly(b.whatsapp_number || "").length >= 12;
+      const hasEmail = String(b.contact_email || "").includes("@");
+      const pendingRequests = pendingRequestCountByBusinessId.get(b.id) || 0;
+      const severity: "critical" | "warning" =
+        pendingRequests > 0 || (!hasWhatsapp && !hasEmail) ? "critical" : "warning";
+      return {
+        id: b.id,
+        name: b.name,
+        slug: b.slug,
+        hasWhatsapp,
+        hasEmail,
+        pendingRequests,
+        severity,
+      };
+    })
+    .filter((item) => !item.hasWhatsapp || !item.hasEmail || item.pendingRequests > 0)
+    .sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "critical" ? -1 : 1;
+      if (b.pendingRequests !== a.pendingRequests) return b.pendingRequests - a.pendingRequests;
+      return a.name.localeCompare(b.name, "pt-BR");
+    })
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      slug: item.slug,
+      value: `${item.hasWhatsapp ? "WA ok" : "WA pend."} · ${
+        item.hasEmail ? "Email ok" : "Email pend."
+      } · Req: ${item.pendingRequests}`,
+      severity: item.severity,
+    }));
+  const analyticsRangeDays =
+    categoryAnalyticsRange === "30d"
+      ? 30
+      : categoryAnalyticsRange === "60d"
+        ? 60
+        : categoryAnalyticsRange === "90d"
+          ? 90
+          : null;
+  const analyticsCutoff = analyticsRangeDays
+    ? new Date(Date.now() - analyticsRangeDays * 24 * 60 * 60 * 1000)
+    : null;
+  const customStartDate = categoryAnalyticsStartDate
+    ? new Date(`${categoryAnalyticsStartDate}T00:00:00`)
+    : null;
+  const customEndDate = categoryAnalyticsEndDate
+    ? new Date(`${categoryAnalyticsEndDate}T23:59:59.999`)
+    : null;
+  const analyticsBusinesses = businesses.filter((b) => {
+    if (!b.created_at) return false;
+    const d = new Date(b.created_at);
+    if (Number.isNaN(d.getTime())) return false;
+    if (categoryAnalyticsRange === "custom") {
+      if (customStartDate && d < customStartDate) return false;
+      if (customEndDate && d > customEndDate) return false;
+      return true;
+    }
+    if (!analyticsCutoff) return true;
+    return d >= analyticsCutoff;
+  });
+  const customRangeLabel =
+    customStartDate || customEndDate
+      ? `${categoryAnalyticsStartDate || "início"} até ${categoryAnalyticsEndDate || "hoje"}`
+      : "intervalo personalizado";
+  const analyticsRangeLabel =
+    categoryAnalyticsRange === "90d"
+      ? "últimos 90 dias"
+      : categoryAnalyticsRange === "60d"
+        ? "últimos 60 dias"
+        : categoryAnalyticsRange === "30d"
+          ? "últimos 30 dias"
+          : customRangeLabel;
+  const applyPresetRange = (days: 30 | 60 | 90) => {
+    setCategoryAnalyticsRange(`${days}d` as CategoryAnalyticsRangeId);
+    setCategoryAnalyticsStartDate("");
+    setCategoryAnalyticsEndDate("");
+    setCategoryPeriodLayerOpen(false);
+  };
+
+  const businessIntegrationsConfiguredCount = analyticsBusinesses.filter((business) => {
+    const hasWhatsapp = digitsOnly(business.whatsapp_number || "").length >= 12;
+    const usesGoogle = business.calendar_mode === "google";
+    return hasWhatsapp || usesGoogle;
+  }).length;
+  const businessesGoogleCount = analyticsBusinesses.filter((b) => b.calendar_mode === "google").length;
+  const businessesInternalCount = analyticsBusinesses.filter(
+    (b) => (b.calendar_mode || "internal") === "internal"
+  ).length;
+  const businessesAutomationsCount = analyticsBusinesses.filter((b) => b.automations_enabled === true).length;
+  const businessesMultiUnitCount = analyticsBusinesses.filter((b) => b.multi_unit_enabled === true).length;
+  const businessesBothChannelsCount = analyticsBusinesses.filter((b) => {
+    const hasWhatsapp = digitsOnly(b.whatsapp_number || "").length >= 12;
+    return hasWhatsapp && b.calendar_mode === "google";
+  }).length;
+  const bothChannelsRate = analyticsBusinesses.length
+    ? (businessesBothChannelsCount / analyticsBusinesses.length) * 100
+    : 0;
+  const businessesWithMonthlyLimitCount = analyticsBusinesses.filter(
+    (b) => typeof b.monthly_appointment_limit === "number" && b.monthly_appointment_limit > 0
+  ).length;
+  const businessesIntegratedRate = analyticsBusinesses.length
+    ? (businessIntegrationsConfiguredCount / analyticsBusinesses.length) * 100
+    : 0;
+  const businessesGoogleRate = analyticsBusinesses.length
+    ? (businessesGoogleCount / analyticsBusinesses.length) * 100
+    : 0;
+  const businessesAutomationsRate = analyticsBusinesses.length
+    ? (businessesAutomationsCount / analyticsBusinesses.length) * 100
+    : 0;
+  const s = developerPlatformSummary;
+  const businessCreatedDates = analyticsBusinesses.reduce<Date[]>((acc, b) => {
+    if (!b.created_at) return acc;
+    const parsed = new Date(b.created_at);
+    if (!Number.isNaN(parsed.getTime())) acc.push(parsed);
+    return acc;
+  }, []);
+  const firstBusinessDate =
+    businessCreatedDates.length > 0
+      ? new Date(Math.min(...businessCreatedDates.map((d) => d.getTime())))
+      : null;
+  const firstBusinessDateLabel = firstBusinessDate
+    ? firstBusinessDate.toLocaleDateString("pt-BR")
+    : "sem histórico";
+  const totalUsageDays = firstBusinessDate
+    ? Math.max(1, Math.ceil((Date.now() - firstBusinessDate.getTime()) / (1000 * 60 * 60 * 24)))
+    : 0;
+  const totalUsageMonths = Math.max(1, Math.round(totalUsageDays / 30));
+
+  const planUsageByCode = businesses.reduce<Record<string, number>>((acc, b) => {
+    const key = String(b.subscription_plan_code || "free");
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const topPlanCode =
+    Object.entries(planUsageByCode).sort((a, b) => b[1] - a[1])[0]?.[0]?.toUpperCase() || "—";
+  const topPlanCount = Object.entries(planUsageByCode).sort((a, b) => b[1] - a[1])[0]?.[1] || 0;
+  const appointmentsThisMonthByBusinessId = new Map(
+    developerMetricsByBusiness.map((item) => [item.id, item.appointmentsThisMonth] as const)
+  );
+  const planPriceOrder = [...monetizationPlans]
+    .sort((a, b) => a.monthly_price_cents - b.monthly_price_cents)
+    .map((p) => String(p.code));
+  const planRankByCode = new Map(planPriceOrder.map((code, idx) => [code, idx] as const));
+  const maxPlanRank = Math.max(0, planPriceOrder.length - 1);
+  const upgradeCandidates = analyticsBusinesses.filter((b) => {
+    const code = String(b.subscription_plan_code || "free");
+    const rank = planRankByCode.get(code) ?? 0;
+    if (rank >= maxPlanRank) return false;
+    const limit = Number(b.monthly_appointment_limit || 0);
+    if (limit <= 0) return false;
+    const usageMonth = Number(appointmentsThisMonthByBusinessId.get(b.id) || 0);
+    return usageMonth >= limit * 0.8;
+  });
+  const upgradePotentialCount = upgradeCandidates.length;
+  const upgradePotentialRate = analyticsBusinesses.length
+    ? (upgradePotentialCount / analyticsBusinesses.length) * 100
+    : 0;
+  const estimatedMrrCents = analyticsBusinesses.reduce((sum, b) => {
+    const code = String(b.subscription_plan_code || "free");
+    const plan = monetizationPlans.find((p) => p.code === code);
+    return sum + (plan?.monthly_price_cents || 0);
+  }, 0);
+
+  const integrationRows = analyticsBusinesses.map((b) => {
+    const hasWhatsapp = digitsOnly(b.whatsapp_number || "").length >= 12;
+    const hasGoogle = b.calendar_mode === "google";
+    const channels = Number(hasWhatsapp) + Number(hasGoogle);
+    return {
+      id: b.id,
+      name: b.name,
+      slug: b.slug,
+      value: `${channels}/2`,
+    };
+  });
+  const subscriptionRows = analyticsBusinesses.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: `${String(b.subscription_plan_code || "free").toUpperCase()} · ${String(
+      b.subscription_status || "active"
+    )}`,
+  }));
+  const companyAnalyticsRows = analyticsBusinesses.map((b) => ({
+    id: b.id,
+    name: b.name,
+    slug: b.slug,
+    value: 1,
+  }));
+
+  const businessesByCnae = Object.entries(
+    analyticsBusinesses.reduce<Record<string, number>>((acc, b) => {
+      const key = b.cnae_description || b.cnae_code || "Não informado";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {})
+  )
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: analyticsBusinesses.length ? (count / analyticsBusinesses.length) * 100 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const businessesByLocation = Object.entries(
+    analyticsBusinesses.reduce<Record<string, number>>((acc, b) => {
+      const key =
+        b.city && b.state ? `${b.city}/${b.state}` : b.state ? `Sem cidade/${b.state}` : "Não informado";
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {})
+  )
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: analyticsBusinesses.length ? (count / analyticsBusinesses.length) * 100 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const businessesByPlan = Object.entries(
+    analyticsBusinesses.reduce<Record<string, number>>((acc, b) => {
+      const key = String(b.subscription_plan_code || "free").toUpperCase();
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {})
+  )
+    .map(([label, count]) => ({
+      label,
+      count,
+      share: analyticsBusinesses.length ? (count / analyticsBusinesses.length) * 100 : 0,
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const categoryAnalytics = {
+    companies: {
+      kpis: [
+        {
+          label: "Empresas ativas",
+          value: String(analyticsBusinesses.length),
+          helper: `${analyticsRangeLabel} (desde ${firstBusinessDateLabel})`,
+          explain:
+            "Quantidade total de empresas no período selecionado. Ajuda a medir crescimento e tamanho da base ativa da plataforma.",
+        },
+        {
+          label: "Google Calendar",
+          value: `${businessesGoogleRate.toFixed(0)}%`,
+          helper: `${businessesGoogleCount} de ${analyticsBusinesses.length} empresas`,
+          explain:
+            "Percentual de empresas que operam com integração Google Calendar no período selecionado. Indica maturidade de integração da base.",
+        },
+        {
+          label: "Integrações ativas",
+          value: `${businessesIntegratedRate.toFixed(0)}%`,
+          helper:
+            totalUsageDays > 0
+              ? `${businessIntegrationsConfiguredCount} empresas em ${totalUsageDays} dias de uso`
+              : `${businessIntegrationsConfiguredCount} empresas`,
+          explain:
+            "Percentual de empresas com pelo menos um canal integrado (WhatsApp e/ou Google). Mede aderência operacional às integrações.",
+        },
+      ],
+      table: {
+        rows: companyAnalyticsRows,
+        valueHeader: "Qtd.",
+        emptyText: "Nenhuma empresa no período selecionado.",
+      },
+      insights: [
+        businessesGoogleRate < 40
+          ? `Adoção de Google Calendar em ${businessesGoogleRate.toFixed(
+              0
+            )}% da base. Priorize onboarding técnico porque integração ativa reduz trabalho manual, melhora confiabilidade de agenda e aumenta retenção operacional.`
+          : "Adoção de Google Calendar saudável para o estágio atual.",
+        businessesIntegratedRate < 60
+          ? `Somente ${businessesIntegratedRate.toFixed(
+              0
+            )}% com integrações ativas. Isso limita automações e comunicação; elevar esse percentual tende a reduzir falhas operacionais e no-show.`
+          : "Integrações com boa cobertura da base.",
+        businessesInternalCount > businessesGoogleCount
+          ? `Modo interno (${businessesInternalCount}) acima de Google (${businessesGoogleCount}). Avaliar migração para integração externa porque sincronização com ferramentas do cliente aumenta aderência ao fluxo real e reduz retrabalho de agenda.`
+          : "Uso de calendário externo já compete com o modo interno.",
+      ],
+    },
+    subscriptions: {
+      kpis: [
+        {
+          label: "MRR estimado",
+          value: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(
+            estimatedMrrCents / 100
+          ),
+          helper:
+            totalUsageMonths > 0
+              ? `Referência acumulada em ~${totalUsageMonths} meses de operação`
+              : "Soma por plano atual das empresas",
+          explain:
+            "Receita recorrente mensal estimada da base atual, calculada pela soma dos valores dos planos vinculados às empresas no período.",
+        },
+        {
+          label: "Plano líder",
+          value: topPlanCode,
+          helper:
+            businessesMultiUnitCount > 0
+              ? `${topPlanCount} empresas · ${businessesMultiUnitCount} multi-unidade`
+              : `${topPlanCount} empresas`,
+          explain:
+            "Plano com maior número de empresas no período selecionado. Ajuda a entender concentração de adoção e estratégia comercial dominante. Multi-unidade no rodapé indica contas com escala para precificação e upsell.",
+        },
+        {
+          label: "Potencial de upgrade",
+          value: `${upgradePotentialCount}`,
+          helper:
+            analyticsBusinesses.length > 0
+              ? `${upgradePotentialRate.toFixed(0)}% da base no período (${analyticsRangeLabel})`
+              : "Sem base suficiente no período",
+          explain:
+            "Quantidade de empresas próximas do limite mensal (>=80%) e com plano superior disponível. Mede oportunidade prática de upgrade comercial.",
+        },
+      ],
+      table: {
+        rows: subscriptionRows,
+        valueHeader: "Plano / status",
+        emptyText: "Nenhuma empresa para exibir.",
+      },
+      insights: [
+        estimatedMrrCents === 0
+          ? "MRR estimado zerado: revisar precificação e enquadramento dos planos."
+          : "MRR estimado disponível para monitorar efeito de upgrades.",
+        totalUsageDays > 0
+          ? `Base histórica considerada: ${totalUsageDays} dias de uso (desde ${firstBusinessDateLabel}).`
+          : "Sem base temporal suficiente para leitura histórica robusta.",
+        businessesWithMonthlyLimitCount > 0
+          ? "Há empresas com limite mensal definido; monitorar risco de estouro e upgrade."
+          : "Sem limites mensais ativos; posicionamento tende a planos mais amplos.",
+        upgradePotentialCount > 0
+          ? `${upgradePotentialCount} empresas já operam perto do limite mensal e têm opção de plano superior: priorizar oferta de upgrade com ganho de capacidade.`
+          : "Não há pressão relevante de limite mensal no período para justificar campanha de upgrade.",
+        topPlanCount > 0
+          ? `Plano ${topPlanCode} concentra maior base. Use como referência para estratégia de preço.`
+          : "Sem concentração de plano identificada.",
+        businessesMultiUnitCount > 0
+          ? `${businessesMultiUnitCount} contas em multi-unidade: alinhar planos que liberam multi-unidade, suporte prioritário e oferta comercial de escala.`
+          : "Nenhuma conta multi-unidade no período; priorize adoção de canais e upgrades de limite antes de empurrar pacotes multi-filial.",
+      ],
+    },
+    integrations: {
+      kpis: [
+        {
+          label: "Cobertura integração",
+          value: `${businessesIntegratedRate.toFixed(0)}%`,
+          helper:
+            totalUsageDays > 0
+              ? `${businessIntegrationsConfiguredCount} empresas ao longo de ${totalUsageDays} dias`
+              : `${businessIntegrationsConfiguredCount} empresas`,
+          explain:
+            "Percentual da base com integração ativa. Quanto maior, maior a chance de automação, consistência operacional e comunicação efetiva.",
+        },
+        {
+          label: "Automações ativas",
+          value: `${businessesAutomationsRate.toFixed(0)}%`,
+          helper: `${businessesAutomationsCount} empresas`,
+          explain:
+            "Percentual de empresas com automações habilitadas no período. Mede profundidade de uso dos recursos avançados da plataforma.",
+        },
+        {
+          label: "Canais completos",
+          value: `${bothChannelsRate.toFixed(0)}%`,
+          helper: `${businessesBothChannelsCount} empresas com WhatsApp e Google`,
+          explain:
+            "Percentual da base com os dois canais principais ativos (mensagens e agenda externa). Mede prontidão para operação integrada e menor retrabalho ponta a ponta.",
+        },
+      ],
+      table: {
+        rows: integrationRows,
+        valueHeader: "Canais ativos",
+        emptyText: "Nenhuma empresa para exibir.",
+      },
+      insights: [
+        businessesIntegratedRate < 50
+          ? "Cobertura de integrações abaixo de 50%. Priorize playbook de ativação."
+          : "Cobertura de integrações em nível razoável.",
+        totalUsageDays > 0
+          ? `Análise temporal cobre todo o uso da ferramenta desde ${firstBusinessDateLabel}.`
+          : "Sem histórico temporal completo disponível.",
+        businessesAutomationsRate < 30
+          ? "Automações ainda pouco adotadas; revisar proposta de valor e onboarding."
+          : "Automações com adoção relevante.",
+        analyticsBusinesses.length > 0 && bothChannelsRate < 35
+          ? `Apenas ${bothChannelsRate.toFixed(
+              0
+            )}% com WhatsApp e Google juntos. Priorize um fluxo de ativação dupla: reduz desencontro entre confirmações e agenda e melhora base para automações.`
+          : "Boa parte da base combina mensagens com calendário Google quando há integração.",
+      ],
+    },
+  } as const;
+
+  const activeCategoryAnalytics = categoryAnalytics[developerDashboardCategory];
+
+  function getDeveloperOverviewPanel(tab: DeveloperOverviewTabId): {
+    value: number;
+    caption: string;
+    rows: DeveloperMetricBreakdownRow[];
+    valueHeader: string;
+    emptyText: string;
+  } {
+  switch (tab) {
+    case "daily":
+      return {
+        value: s?.appointmentsThisMonth ?? 0,
+        caption: "Agendamentos no mês corrente (UTC)",
+        rows: developerRowsMonth,
+        valueHeader: "No mês",
+        emptyText: "Sem movimentação no período."
+      };
+    case "urgencies":
+      return {
+        value: developerRowsOperationalUrgencies.length,
+        caption: "Empresas com pendências operacionais",
+        rows: developerRowsOperationalUrgencies,
+        valueHeader: "Pendências",
+        emptyText: "Nenhuma urgência operacional no momento."
+      };
+    case "communication":
+      return {
+        value: developerRowsCommunicationCenter.length,
+        caption: "Empresas com pendência de comunicação",
+        rows: developerRowsCommunicationCenter,
+        valueHeader: "Status",
+        emptyText: "Central de comunicação sem pendências."
+      };
+    default:
+      return {
+        value: 0,
+        caption: "",
+        rows: developerRowsRegistered,
+        valueHeader: "Qtd.",
+        emptyText: ""
+      };
+  }
+  }
+
+  const developerOverviewPanels = DEVELOPER_OVERVIEW_TAB_ITEMS.map((item) => ({
+    tabId: item.value,
+    label: item.label,
+    ...getDeveloperOverviewPanel(item.value)
+  }));
+
   const selectedCnae = getCnaeByCode(selectedBusiness?.cnae_code || null);
   const suggestedTemplateByBusiness = selectedCnae?.templateKey || "";
   const localPriceFactor = getLocalPriceFactor(selectedBusiness?.state, selectedBusiness?.city);
-  const googleModeBusinesses = businesses.filter(
-    (business) => business.calendar_mode === "google"
-  ).length;
-  const internalModeBusinesses = totalBusinesses - googleModeBusinesses;
   const whatsappConfigured = digitsOnly(clientWhatsapp).length >= 12;
   const googleConfigured = Boolean(tokenExpiresAt);
   const periodBounds = getPeriodBounds(clientCalendarAnchorDate, clientCalendarView);
@@ -3278,7 +4667,7 @@ export default function HomePage() {
       : [];
   const scheduleBusiness = businesses.find((b) => b.id === selectedBusinessId);
   const scheduleTimezone =
-    scheduleBusiness?.timezone || timezone || "America/Sao_Paulo";
+    scheduleBusiness?.timezone || "America/Sao_Paulo";
   const getHoursRuleForDate = (dateIso: string) => {
     const scheduleWeekday = resolveScheduleWeekday({
       dateIso,
@@ -3305,23 +4694,12 @@ export default function HomePage() {
       : null;
   const dailySegments: Array<{ start: number; end: number }> =
     dailyHoursRule && dailyHoursRule.isActive
-      ? dailyHoursRule.hasLunchBreak
-        ? [
-            {
-              start: toMinutesFromHHMM(dailyHoursRule.startTime),
-              end: toMinutesFromHHMM(dailyHoursRule.lunchStartTime)
-            },
-            {
-              start: toMinutesFromHHMM(dailyHoursRule.lunchEndTime),
-              end: toMinutesFromHHMM(dailyHoursRule.endTime)
-            }
-          ].filter((segment) => segment.start < segment.end)
-        : [
-            {
-              start: toMinutesFromHHMM(dailyHoursRule.startTime),
-              end: toMinutesFromHHMM(dailyHoursRule.endTime)
-            }
-          ]
+      ? dailyHoursRule.shifts
+          .map((s) => ({
+            start: toMinutesFromHHMM(s.startTime),
+            end: toMinutesFromHHMM(s.endTime)
+          }))
+          .filter((segment) => segment.start < segment.end)
       : [];
   const dayHourSlots = Array.from({ length: 24 }, (_, hour) => hour).filter((hour) => {
     const minuteMark = hour * 60;
@@ -3338,28 +4716,6 @@ export default function HomePage() {
       (business.city || "").toLowerCase().includes(q)
     );
   });
-  const serviceCategories = Array.from(
-    new Set(services.map((service) => service.category || "").filter(Boolean))
-  );
-  const filteredServices = services.filter((service) => {
-    const search = serviceSearch.trim().toLowerCase();
-    const matchSearch =
-      !search ||
-      service.name.toLowerCase().includes(search) ||
-      (service.description || "").toLowerCase().includes(search);
-    const matchCategory =
-      !serviceCategoryFilter || (service.category || "") === serviceCategoryFilter;
-    const matchStatus =
-      !serviceStatusFilter ||
-      (serviceStatusFilter === "active" && service.is_active) ||
-      (serviceStatusFilter === "inactive" && !service.is_active);
-    return matchSearch && matchCategory && matchStatus;
-  });
-  const serviceTicketMedio =
-    services.length > 0
-      ? services.reduce((sum, service) => sum + (service.price_cents || 0), 0) / services.length
-      : 0;
-  const servicesWithImagesCount = services.filter((service) => service.image_urls?.length > 0).length;
   const activeServiceCount = services.filter((service) => service.is_active).length;
   const activeBusinessDays = businessHours.filter(
     (item) => item.isActive && item.weekday >= 0 && item.weekday <= 6
@@ -3381,127 +4737,386 @@ export default function HomePage() {
   ].filter((item) => item.trim().length > 0).length;
 
   function handleSelectBusiness(id: string) {
+    setDeveloperNewBusinessModalOpen(false);
+    setDeveloperBusinessModalMode("create");
+    setBusinessIdBeforeNewModal(null);
+    setDeveloperBusinessCreatingNew(false);
     setSelectedBusinessId(id);
     setBusinessPickerOpen(false);
     setBusinessQuery("");
   }
 
-  return (
-    <main className="page">
-      <section className="hero card glassCard">
-        <div className="headerRow">
-          <h1 className="gradientText">Painel de gerenciamento</h1>
-          <div className="headerActions">
-            <ThemeToggle />
-            <Button type="button" variant="outline" onClick={() => void handleLogout()}>
-              Sair
+  const developerBusinessConfigurationFields = (
+    <>
+      <FieldGroup
+        title="Identificação da empresa"
+        accordionId="identificacao"
+        accordionOpen={developerBusinessFormSection === "identificacao"}
+        onAccordionToggle={() => toggleDeveloperBusinessFormSection("identificacao")}
+      >
+        <label>
+          Nome da empresa
+          <Input
+            placeholder="Ex.: Studio Ana"
+            value={name}
+            onChange={(event) => {
+              const v = event.target.value;
+              setName(v);
+              if (v.trim()) {
+                setDeveloperBusinessRequiredFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.name;
+                  return next;
+                });
+              }
+            }}
+            onBlur={() => {
+              if (!name.trim()) {
+                setDeveloperBusinessRequiredFieldErrors((prev) => ({
+                  ...prev,
+                  name: "Informe o nome da empresa."
+                }));
+              } else {
+                setDeveloperBusinessRequiredFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.name;
+                  return next;
+                });
+              }
+            }}
+          />
+          {developerBusinessRequiredFieldErrors.name ? (
+            <small className="fieldInputError">{developerBusinessRequiredFieldErrors.name}</small>
+          ) : null}
+        </label>
+        <label>
+          CNPJ
+          <div className="actionsRow">
+            <Input
+              placeholder="00.000.000/0000-00"
+              value={cnpj}
+              onChange={(event) => setCnpj(maskCnpj(event.target.value))}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={cnpjLookupLoading}
+              onClick={() => void handleLookupCnpj()}
+            >
+              {cnpjLookupLoading ? "Buscando..." : "Buscar CNPJ"}
             </Button>
           </div>
-        </div>
-        <p>Gestão centralizada da operação, agenda, clientes, comunicação e financeiro.</p>
-      </section>
+          {cnpjLookupFeedback ? <small className="helperText">{cnpjLookupFeedback}</small> : null}
+        </label>
+        <label>
+          Razão social
+          <Input
+            value={legalName}
+            onChange={(event) => setLegalName(event.target.value)}
+            placeholder="Razão social da empresa"
+          />
+        </label>
+        <label>
+          Nome fantasia
+          <Input
+            value={tradeName}
+            onChange={(event) => setTradeName(event.target.value)}
+            placeholder="Nome fantasia"
+          />
+        </label>
+        <label>
+          Ramo da empresa (CNAE)
+          <Select
+            value={cnaeCode}
+            onChange={(event) => {
+              const code = event.target.value;
+              const cnae = getCnaeByCode(code);
+              setCnaeCode(code);
+              setCnaeDescription(cnae?.description || "");
+              setBusinessType(cnae?.description || "");
+              if (code) {
+                setDeveloperBusinessRequiredFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.cnaeCode;
+                  return next;
+                });
+              }
+            }}
+            onBlur={() => {
+              if (!cnaeCode) {
+                setDeveloperBusinessRequiredFieldErrors((prev) => ({
+                  ...prev,
+                  cnaeCode: "Selecione o ramo da empresa (CNAE)."
+                }));
+              } else {
+                setDeveloperBusinessRequiredFieldErrors((prev) => {
+                  const next = { ...prev };
+                  delete next.cnaeCode;
+                  return next;
+                });
+              }
+            }}
+          >
+            <option value="" disabled>
+              Selecione
+            </option>
+            {CNAE_OPTIONS.map((item) => (
+              <option key={item.code} value={item.code}>
+                {item.code} - {item.description}
+              </option>
+            ))}
+          </Select>
+          {developerBusinessRequiredFieldErrors.cnaeCode ? (
+            <small className="fieldInputError">
+              {developerBusinessRequiredFieldErrors.cnaeCode}
+            </small>
+          ) : null}
+        </label>
+      </FieldGroup>
 
+      <FieldGroup
+        title="Endereço"
+        accordionId="endereco"
+        accordionOpen={developerBusinessFormSection === "endereco"}
+        onAccordionToggle={() => toggleDeveloperBusinessFormSection("endereco")}
+      >
+        <label>
+          CEP
+          <Input
+            value={postalCode}
+            onChange={(event) => handlePostalCodeChange(event.target.value)}
+            placeholder="00000-000"
+          />
+        </label>
+        {cepFeedback ? <p className="feedbackOk">{cepFeedback}</p> : null}
+        <label>
+          Endereço (rua/avenida)
+          <Input
+            value={addressLine}
+            onChange={(event) => setAddressLine(event.target.value)}
+            placeholder="Rua, avenida, etc."
+          />
+        </label>
+        <label>
+          Número
+          <Input
+            value={addressNumber}
+            onChange={(event) => setAddressNumber(event.target.value)}
+            placeholder="Número"
+          />
+        </label>
+        <label>
+          Complemento
+          <Input
+            value={addressComplement}
+            onChange={(event) => setAddressComplement(event.target.value)}
+            placeholder="Sala, loja, referência"
+          />
+        </label>
+        <label>
+          Bairro
+          <Input
+            value={neighborhood}
+            onChange={(event) => setNeighborhood(event.target.value)}
+          />
+        </label>
+        <label>
+          Cidade
+          <Input value={city} onChange={(event) => setCity(event.target.value)} />
+        </label>
+        <label>
+          UF
+          <Input
+            value={stateUf}
+            onChange={(event) => setStateUf(event.target.value)}
+            placeholder="SP"
+          />
+        </label>
+      </FieldGroup>
+
+      <FieldGroup
+        title="Contato principal"
+        accordionId="contato"
+        accordionOpen={developerBusinessFormSection === "contato"}
+        onAccordionToggle={() => toggleDeveloperBusinessFormSection("contato")}
+      >
+        <label>
+          Nome do contato
+          <Input
+            value={contactName}
+            onChange={(event) => setContactName(event.target.value)}
+          />
+        </label>
+        <label>
+          Telefone do contato
+          <Input
+            value={contactPhone}
+            onChange={(event) => {
+              setContactPhone(maskPhoneBr(event.target.value));
+            }}
+            placeholder="+55 (11) 99999-9999"
+          />
+        </label>
+        <label>
+          E-mail do contato
+          <Input
+            value={contactEmail}
+            onChange={(event) => setContactEmail(event.target.value)}
+            placeholder="contato@empresa.com"
+            type="email"
+          />
+        </label>
+      </FieldGroup>
+
+      <FieldGroup
+        title="Integração"
+        accordionId="integracao"
+        accordionOpen={developerBusinessFormSection === "integracao"}
+        onAccordionToggle={() => toggleDeveloperBusinessFormSection("integracao")}
+      >
+        <p className="helperText">
+          Configure o número de WhatsApp que será vinculado à automação para identificação da
+          empresa e roteamento das mensagens.
+        </p>
+        <label>
+          WhatsApp da integração
+          <Input
+            value={clientWhatsapp}
+            onChange={(event) => setClientWhatsapp(maskPhoneBr(event.target.value))}
+            placeholder="+55 (11) 99999-9999"
+          />
+        </label>
+      </FieldGroup>
+
+      <FieldGroup
+        title="Operação"
+        accordionId="operacao"
+        accordionOpen={developerBusinessFormSection === "operacao"}
+        onAccordionToggle={() => toggleDeveloperBusinessFormSection("operacao")}
+      >
+        <p className="helperText">
+          Fuso horário: <strong>{getBrowserIanaTimezone()}</strong> — detectado automaticamente
+          neste dispositivo e aplicado ao criar ou atualizar o cadastro.
+        </p>
+        <label>
+          Modo de agenda
+          <Select
+            value={calendarMode}
+            onChange={(event) => setCalendarMode(event.target.value as "internal" | "google")}
+          >
+            <option value="internal">Interna (recomendada)</option>
+            <option value="google">Google Calendar (opcional)</option>
+          </Select>
+        </label>
+      </FieldGroup>
+    </>
+  );
+
+  return (
+    <div className="appLayout">
       {role === "developer" ? (
-        <div className="adminShell">
-          <aside className="adminSidebar card glassCard">
-            <div className="adminSidebarNav">
-              <button
-                type="button"
-                className={`sidebarNavButton ${developerArea === "dashboard" ? "isActive" : ""}`}
-                onClick={() => setDeveloperArea("dashboard")}
-              >
-                <span className="sidebarNavIcon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" className="sidebarNavIconSvg">
-                    <rect x="3" y="3" width="8" height="8" rx="2" />
-                    <rect x="13" y="3" width="8" height="5" rx="2" />
-                    <rect x="13" y="10" width="8" height="11" rx="2" />
-                    <rect x="3" y="13" width="8" height="8" rx="2" />
-                  </svg>
-                </span>
-                <span>Dashboard</span>
-              </button>
-              <p className="adminSidebarCaption">Dashboard</p>
-              <div className="adminSidebarSubnav">
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${developerArea === "dashboard" && dashboardArea === "overview" ? "isActive" : ""}`}
-                  onClick={() => {
-                    setDeveloperArea("dashboard");
-                    setDashboardArea("overview");
-                  }}
-                >
-                  📊 Visão geral
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${developerArea === "dashboard" && dashboardArea === "businesses" ? "isActive" : ""}`}
-                  onClick={() => {
-                    setDeveloperArea("dashboard");
-                    setDashboardArea("businesses");
-                  }}
-                >
-                  🏢 Negócios
-                </button>
-              </div>
-              <button
-                type="button"
-                className={`sidebarNavButton ${developerArea === "configuration" ? "isActive" : ""}`}
-                onClick={() => setDeveloperArea("configuration")}
-              >
-                <span className="sidebarNavIcon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" className="sidebarNavIconSvg">
-                    <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" />
-                    <path d="M19.4 13.5c.04-.5.04-1 0-1.5l1.6-1.2a1 1 0 0 0 .24-1.3l-1.5-2.6a1 1 0 0 0-1.2-.44l-1.9.75a7.7 7.7 0 0 0-1.3-.75l-.3-2.05A1 1 0 0 0 14 3h-3a1 1 0 0 0-.98.83l-.3 2.05c-.46.2-.9.45-1.3.75l-1.9-.75a1 1 0 0 0-1.2.44L3.8 8.9a1 1 0 0 0 .24 1.3L5.64 11.4c-.04.5-.04 1 0 1.5l-1.6 1.2a1 1 0 0 0-.24 1.3l1.5 2.6a1 1 0 0 0 1.2.44l1.9-.75c.4.3.84.55 1.3.75l.3 2.05A1 1 0 0 0 11 21h3a1 1 0 0 0 .98-.83l.3-2.05c.46-.2.9-.45 1.3-.75l1.9.75a1 1 0 0 0 1.2-.44l1.5-2.6a1 1 0 0 0-.24-1.3l-1.6-1.2Z" />
-                  </svg>
-                </span>
-                <span>Configurações</span>
-              </button>
-              <div className="adminSidebarSubnav">
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${developerArea === "configuration" && configurationArea === "business" ? "isActive" : ""}`}
-                  onClick={() => {
-                    setDeveloperArea("configuration");
-                    setConfigurationArea("business");
-                  }}
-                >
-                  🧾 Cadastro
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${developerArea === "configuration" && configurationArea === "integrations" ? "isActive" : ""}`}
-                  onClick={() => {
-                    setDeveloperArea("configuration");
-                    setConfigurationArea("integrations");
-                  }}
-                >
-                  🔌 Integrações
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${developerArea === "configuration" && configurationArea === "calendar" ? "isActive" : ""}`}
-                  onClick={() => {
-                    setDeveloperArea("configuration");
-                    setConfigurationArea("calendar");
-                  }}
-                >
-                  📅 Google Calendar
-                </button>
-              </div>
+        <>
+          <aside className="modernSidebar">
+            <div className="modernSidebarBrand">
+              <div className="modernSidebarLogo" aria-hidden>A</div>
+              <span className="modernSidebarBrandName">Agendamento</span>
             </div>
-            <div className="adminSidebarFooter">
-              <span className="adminSidebarUser">Desenvolvedor</span>
-              <small>Painel da ferramenta</small>
+
+            <nav className="modernSidebarNav">
+              <p className="modernSidebarCaption">Dashboard</p>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "dashboard" && dashboardArea === "overview" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("dashboard"); setDashboardArea("overview"); }}
+              >
+                <span className="modernSidebarIcon"><LayoutDashboard size={16} /></span>
+                Visão geral
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "dashboard" && dashboardArea === "categories" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("dashboard"); setDashboardArea("categories"); }}
+              >
+                <span className="modernSidebarIcon"><FolderKanban size={16} /></span>
+                Gestão por categoria
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "dashboard" && dashboardArea === "communication" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("dashboard"); setDashboardArea("communication"); }}
+              >
+                <span className="modernSidebarIcon"><MessageSquare size={16} /></span>
+                Central de comunicação
+              </button>
+
+              <p className="modernSidebarCaption">Gerenciamento</p>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "configuration" && configurationArea === "business" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("configuration"); setConfigurationArea("business"); handleDeveloperEmpresasOpenList(); }}
+              >
+                <span className="modernSidebarIcon"><Building2 size={16} /></span>
+                Empresas
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "configuration" && configurationArea === "plans" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("configuration"); setConfigurationArea("plans"); }}
+              >
+                <span className="modernSidebarIcon"><CreditCard size={16} /></span>
+                Planos de assinatura
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${developerArea === "configuration" && configurationArea === "integrations" ? " isActive" : ""}`}
+                onClick={() => { setDeveloperArea("configuration"); setConfigurationArea("integrations"); }}
+              >
+                <span className="modernSidebarIcon"><Plug size={16} /></span>
+                Integrações
+              </button>
+            </nav>
+
+            <div className="modernSidebarFooter">
+              <div className="modernSidebarAvatar" aria-hidden>D</div>
+              <div className="modernSidebarFooterInfo">
+                <span>Desenvolvedor</span>
+                <small>Painel da ferramenta</small>
+              </div>
             </div>
           </aside>
 
-          <div className="adminContent">
+          <div className="appMain">
+            <section className="hero card pageHeroSticky pageHeroCompact">
+              <div className="headerRow">
+                <h1 className="gradientText">
+                  {developerArea === "dashboard"
+                    ? dashboardArea === "overview"
+                      ? "Visão geral"
+                      : dashboardArea === "categories"
+                        ? "Gestão por categoria"
+                        : "Central de comunicação"
+                    : configurationArea === "business"
+                      ? "Empresas"
+                      : configurationArea === "plans"
+                        ? "Planos de assinatura"
+                        : "Integrações"}
+                </h1>
+                <div className="headerActions">
+                  <ThemeToggle />
+                  <Button type="button" variant="outline" onClick={() => void handleLogout()}>
+                    Sair
+                  </Button>
+                </div>
+              </div>
+            </section>
+            <div className="adminContent">
             <div className="grid adminGrid">
-          {!(developerArea === "configuration" && configurationArea === "business") ? (
+          {developerArea === "configuration" && configurationArea === "integrations" ? (
             <AdminCard
               className="full contextCard"
               title="Contexto operacional"
-              description="Defina o negócio ativo antes de executar ações na plataforma (desenvolvedor)."
+              description="Defina a empresa ativa antes de executar ações na plataforma (desenvolvedor)."
             >
               <div className="contextPicker">
                 <div className="contextPickerSummary">
@@ -3514,15 +5129,17 @@ export default function HomePage() {
                     {businessPickerOpen ? "Fechar seleção" : "Alterar"}
                   </Button>
                   <div className="contextInfoRow">
-                    <span className="contextInfoLabel">Negócio ativo</span>
+                    <span className="contextInfoLabel">Empresa ativa</span>
                     <span className="contextInfoValue">
-                      {selectedBusiness?.name || "Nenhum negócio selecionado"}
+                      {selectedBusiness
+                        ? repairUtf8MisinterpretedAsLatin1(selectedBusiness.name)
+                        : "Nenhuma empresa selecionada"}
                     </span>
                   </div>
                   <div className="contextInfoRow">
                     <span className="contextInfoLabel">Modo de agenda</span>
                     <span className="contextInfoValue">
-                      {selectedBusiness?.calendar_mode || "Não definido"}
+                      {formatDeveloperCalendarModeLabel(selectedBusiness?.calendar_mode)}
                     </span>
                   </div>
                 </div>
@@ -3530,13 +5147,13 @@ export default function HomePage() {
                 {businessPickerOpen ? (
                   <div className="contextPickerPanel">
                     <Input
-                      placeholder="Buscar negócio por nome, slug ou cidade..."
+                      placeholder="Buscar empresa por nome, slug ou cidade..."
                       value={businessQuery}
                       onChange={(event) => setBusinessQuery(event.target.value)}
                     />
                     <div className="contextPickerList">
                       {filteredBusinesses.length === 0 ? (
-                        <p className="helperText">Nenhum negócio encontrado.</p>
+                        <p className="helperText">Nenhuma empresa encontrada.</p>
                       ) : (
                         filteredBusinesses.map((business) => (
                           <button
@@ -3547,9 +5164,9 @@ export default function HomePage() {
                             }`}
                             onClick={() => handleSelectBusiness(business.id)}
                           >
-                            <strong>{business.name}</strong>
+                            <strong>{repairUtf8MisinterpretedAsLatin1(business.name)}</strong>
                             <small>
-                              {business.timezone} - {business.calendar_mode || "internal"}
+                              {business.timezone} — {formatDeveloperCalendarModeLabel(business.calendar_mode)}
                             </small>
                           </button>
                         ))
@@ -3563,431 +5180,312 @@ export default function HomePage() {
           {developerArea === "configuration" ? (
             <>
               {configurationArea === "business" ? (
-                <AdminCard className="full" title="Cadastro de negócio">
-                  <form className="form businessFormGrid" onSubmit={handleSubmit}>
-                    <FieldGroup title="Identificação da empresa">
-                      <label>
-                        Nome do negócio
-                        <Input
-                          placeholder="Ex.: Studio Ana"
-                          value={name}
-                          onChange={(event) => setName(event.target.value)}
-                          required
-                        />
-                      </label>
-                      <label>
-                        CNPJ
-                        <div className="actionsRow">
-                          <Input
-                            placeholder="00.000.000/0000-00"
-                            value={cnpj}
-                            onChange={(event) => setCnpj(maskCnpj(event.target.value))}
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={cnpjLookupLoading}
-                            onClick={() => void handleLookupCnpj()}
-                          >
-                            {cnpjLookupLoading ? "Buscando..." : "Buscar CNPJ"}
-                          </Button>
-                        </div>
-                        {cnpjLookupFeedback ? <small className="helperText">{cnpjLookupFeedback}</small> : null}
-                      </label>
-                      <label>
-                        Razão social
-                        <Input
-                          value={legalName}
-                          onChange={(event) => setLegalName(event.target.value)}
-                          placeholder="Razão social da empresa"
-                        />
-                      </label>
-                      <label>
-                        Nome fantasia
-                        <Input
-                          value={tradeName}
-                          onChange={(event) => setTradeName(event.target.value)}
-                          placeholder="Nome fantasia"
-                        />
-                      </label>
-                      <label>
-                        Ramo de negócio (CNAE)
-                        <Select
-                          value={cnaeCode}
-                          onChange={(event) => {
-                            const code = event.target.value;
-                            const cnae = getCnaeByCode(code);
-                            setCnaeCode(code);
-                            setCnaeDescription(cnae?.description || "");
-                            // Mantém compatibilidade com o campo legado em templates.
-                            setBusinessType(cnae?.description || "");
-                          }}
-                          required
-                        >
-                          <option value="" disabled>
-                            Selecione
-                          </option>
-                          {CNAE_OPTIONS.map((item) => (
-                            <option key={item.code} value={item.code}>
-                              {item.code} - {item.description}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
-                    </FieldGroup>
-
-                    <FieldGroup title="Endereço">
-                      <label>
-                        CEP
-                        <Input
-                          value={postalCode}
-                          onChange={(event) => handlePostalCodeChange(event.target.value)}
-                          placeholder="00000-000"
-                        />
-                      </label>
-                      {cepFeedback ? <p className="feedbackOk">{cepFeedback}</p> : null}
-                      <label>
-                        Endereço (rua/avenida)
-                        <Input
-                          value={addressLine}
-                          onChange={(event) => setAddressLine(event.target.value)}
-                          placeholder="Rua, avenida, etc."
-                        />
-                      </label>
-                      <label>
-                        Número
-                        <Input
-                          value={addressNumber}
-                          onChange={(event) => setAddressNumber(event.target.value)}
-                          placeholder="Número"
-                        />
-                      </label>
-                      <label>
-                        Complemento
-                        <Input
-                          value={addressComplement}
-                          onChange={(event) => setAddressComplement(event.target.value)}
-                          placeholder="Sala, loja, referência"
-                        />
-                      </label>
-                      <label>
-                        Bairro
-                        <Input
-                          value={neighborhood}
-                          onChange={(event) => setNeighborhood(event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Cidade
-                        <Input
-                          value={city}
-                          onChange={(event) => setCity(event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        UF
-                        <Input
-                          value={stateUf}
-                          onChange={(event) => setStateUf(event.target.value)}
-                          placeholder="SP"
-                        />
-                      </label>
-                    </FieldGroup>
-
-                    <FieldGroup title="Contato principal">
-                      <label>
-                        Nome do contato
-                        <Input
-                          value={contactName}
-                          onChange={(event) => setContactName(event.target.value)}
-                        />
-                      </label>
-                      <label>
-                        Telefone do contato
-                        <Input
-                          value={contactPhone}
-                          onChange={(event) => {
-                            const masked = maskPhoneBr(event.target.value);
-                            setContactPhone(masked);
-                            const tz = inferTimezoneFromPhone(masked);
-                            if (tz) setTimezone(tz);
-                          }}
-                          placeholder="+55 (11) 99999-9999"
-                        />
-                      </label>
-                      <label>
-                        E-mail do contato
-                        <Input
-                          value={contactEmail}
-                          onChange={(event) => setContactEmail(event.target.value)}
-                          placeholder="contato@empresa.com"
-                          type="email"
-                        />
-                      </label>
-                    </FieldGroup>
-
-                    <FieldGroup title="Integração">
-                      <p className="helperText">
-                        Configure o número de WhatsApp que será vinculado à automação para
-                        identificação do negócio e roteamento das mensagens.
-                      </p>
-                      <label>
-                        WhatsApp da integração
-                        <Input
-                          value={clientWhatsapp}
-                          onChange={(event) =>
-                            setClientWhatsapp(maskPhoneBr(event.target.value))
-                          }
-                          placeholder="+55 (11) 99999-9999"
-                        />
-                      </label>
-                    </FieldGroup>
-
-                    <FieldGroup title="Operação">
-                      <label>
-                        Timezone
-                        <Input
-                          value={timezone}
-                          onChange={(event) => setTimezone(event.target.value)}
-                          required
-                        />
-                      </label>
-                      <label>
-                        Modo de agenda
-                        <Select
-                          value={calendarMode}
-                          onChange={(event) =>
-                            setCalendarMode(event.target.value as "internal" | "google")
-                          }
-                        >
-                          <option value="internal">Interna (recomendada)</option>
-                          <option value="google">Google Calendar (opcional)</option>
-                        </Select>
-                      </label>
-                    </FieldGroup>
-                    <div className="actionsRow">
-                      <Button disabled={isSaving} className="saveButton">
-                        {isSaving ? "Salvando..." : "Criar novo cadastro"}
-                      </Button>
-                      <Button
-                        type="button"
-                        className="saveButton"
-                        disabled={isUpdatingProfile}
-                        onClick={() => void handleUpdateBusinessProfile()}
-                      >
-                        {isUpdatingProfile
-                          ? "Atualizando..."
-                          : "Atualizar cadastro existente"}
-                      </Button>
-                    </div>
-                    {feedback ? (
+                <>
+                  <AdminCard
+                    className="full"
+                    title="Gerenciamento de empresas"
+                    description="Cadastro, edição e visão em grade de todas as empresas da plataforma."
+                  >
+                    <DeveloperBusinessesAgGrid
+                      rowData={businesses}
+                      onEditRow={handleDeveloperEditBusiness}
+                      onNewBusiness={handleDeveloperStartNewBusiness}
+                    />
+                    {feedback && !developerNewBusinessModalOpen ? (
                       <p
                         className={
                           feedbackType === "error" ? "feedbackError" : "feedbackOk"
                         }
+                        style={{ marginTop: "12px" }}
                       >
                         {feedback}
                       </p>
                     ) : null}
-                  </form>
-                  {cnpjLookupPreview ? (
-                    <div className="detailsModalBackdrop" onClick={() => setCnpjLookupPreview(null)}>
+                  </AdminCard>
+
+                  {developerNewBusinessModalOpen ? (
+                    <div
+                      className="detailsModalBackdrop developerNewBusinessModalBackdrop"
+                      onClick={() => {
+                        if (cnpjLookupPreview || isSaving || isUpdatingProfile) return;
+                        restoreDeveloperBusinessContextAfterClosingNewModal();
+                      }}
+                      role="presentation"
+                    >
                       <article
-                        className="detailsModalCard"
+                        className="detailsModalCard developerNewBusinessModalCard structuredFormModal"
                         onClick={(event) => event.stopPropagation()}
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="developerNewBusinessModalTitle"
                       >
-                        <div className="detailsPanelHeader">
-                          <h3 className="integrationName">Confirmar dados do CNPJ</h3>
+                        <div className="structuredFormModalHeader">
+                          <h2 id="developerNewBusinessModalTitle" className="integrationName">
+                            {developerBusinessModalMode === "edit"
+                              ? "Editar empresa"
+                              : "Nova empresa"}
+                          </h2>
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => setCnpjLookupPreview(null)}
+                            disabled={isSaving || isUpdatingProfile}
+                            onClick={() => restoreDeveloperBusinessContextAfterClosingNewModal()}
                           >
                             Fechar
                           </Button>
                         </div>
-                        <div className="list">
-                          <div className="actionsRow">
+                        <form
+                          className="structuredFormModalForm"
+                          noValidate
+                          onSubmit={handleSubmit}
+                        >
+                          <div className="structuredFormScroll form businessFormGrid">
+                            {developerBusinessConfigurationFields}
+                            {feedback ? (
+                              <p
+                                className={
+                                  feedbackType === "error" ? "feedbackError" : "feedbackOk"
+                                }
+                              >
+                                {feedback}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="structuredFormFooter">
                             <Button
                               type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => selectAllCnpjApplySelection(true)}
+                              variant="outline"
+                              disabled={isSaving || isUpdatingProfile}
+                              onClick={() => restoreDeveloperBusinessContextAfterClosingNewModal()}
                             >
-                              Marcar todos
+                              Cancelar
                             </Button>
                             <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => selectAllCnpjApplySelection(false)}
+                              type="submit"
+                              disabled={isSaving || isUpdatingProfile}
+                              className="saveButton"
                             >
-                              Desmarcar todos
+                              {developerBusinessModalMode === "edit"
+                                ? isUpdatingProfile
+                                  ? "Salvando..."
+                                  : "Salvar alterações"
+                                : isSaving
+                                  ? "Salvando..."
+                                  : "Salvar"}
                             </Button>
                           </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.legalName}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("legalName", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Razão social</strong>
-                              <small>{cnpjLookupPreview.legalName || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.tradeName}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("tradeName", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Nome fantasia</strong>
-                              <small>{cnpjLookupPreview.tradeName || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.addressLine}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("addressLine", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Endereço (logradouro)</strong>
-                              <small>{cnpjLookupPreview.addressLine || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.addressNumber}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("addressNumber", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Número</strong>
-                              <small>{cnpjLookupPreview.addressNumber || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.addressComplement}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("addressComplement", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Complemento</strong>
-                              <small>{cnpjLookupPreview.addressComplement || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.neighborhood}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("neighborhood", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Bairro</strong>
-                              <small>{cnpjLookupPreview.neighborhood || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.city}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("city", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>Cidade</strong>
-                              <small>{cnpjLookupPreview.city || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.state}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("state", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>UF</strong>
-                              <small>{cnpjLookupPreview.state || "-"}</small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.postalCode}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("postalCode", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>CEP</strong>
-                              <small>
-                                {formatMaskedFromDigits(cnpjLookupPreview.postalCode || "", maskCep) ||
-                                  "-"}
-                              </small>
-                            </div>
-                          </div>
-                          <div className="cnpjConfirmItem">
-                            <Checkbox
-                              checked={cnpjApplySelection.cnae}
-                              onChange={(event) =>
-                                toggleCnpjApplySelection("cnae", event.target.checked)
-                              }
-                              label=""
-                            />
-                            <div>
-                              <strong>CNAE principal</strong>
-                              <small>
-                                {cnpjLookupPreview.cnaeCode
-                                  ? `${cnpjLookupPreview.cnaeCode} - ${cnpjLookupPreview.cnaeDescription || ""}`
-                                  : "-"}
-                              </small>
-                            </div>
-                          </div>
-                        </div>
-                        {!hasAnyCnpjFieldSelected ? (
-                          <p className="feedbackError">Selecione ao menos um campo para aplicar.</p>
-                        ) : null}
-                        <div className="actionsRow">
-                          <Button
-                            type="button"
-                            onClick={applyCnpjLookupData}
-                            disabled={!hasAnyCnpjFieldSelected}
-                          >
-                            Aplicar dados
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
+                        </form>
+                        {cnpjLookupPreview ? (
+                          <div
+                            className="detailsModalBackdrop developerNewBusinessCnpjOverlay"
                             onClick={() => setCnpjLookupPreview(null)}
                           >
-                            Cancelar
-                          </Button>
-                        </div>
+                            <article
+                              className="detailsModalCard"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <div className="detailsPanelHeader">
+                                <h3 className="integrationName">Confirmar dados do CNPJ</h3>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => setCnpjLookupPreview(null)}
+                                >
+                                  Fechar
+                                </Button>
+                              </div>
+                              <div className="list">
+                                <div className="actionsRow">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => selectAllCnpjApplySelection(true)}
+                                  >
+                                    Marcar todos
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => selectAllCnpjApplySelection(false)}
+                                  >
+                                    Desmarcar todos
+                                  </Button>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.legalName}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("legalName", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Razão social</strong>
+                                    <small>{cnpjLookupPreview.legalName || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.tradeName}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("tradeName", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Nome fantasia</strong>
+                                    <small>{cnpjLookupPreview.tradeName || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.addressLine}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("addressLine", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Endereço (logradouro)</strong>
+                                    <small>{cnpjLookupPreview.addressLine || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.addressNumber}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("addressNumber", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Número</strong>
+                                    <small>{cnpjLookupPreview.addressNumber || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.addressComplement}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection(
+                                        "addressComplement",
+                                        event.target.checked
+                                      )
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Complemento</strong>
+                                    <small>{cnpjLookupPreview.addressComplement || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.neighborhood}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("neighborhood", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Bairro</strong>
+                                    <small>{cnpjLookupPreview.neighborhood || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.city}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("city", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>Cidade</strong>
+                                    <small>{cnpjLookupPreview.city || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.state}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("state", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>UF</strong>
+                                    <small>{cnpjLookupPreview.state || "-"}</small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.postalCode}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("postalCode", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>CEP</strong>
+                                    <small>
+                                      {formatMaskedFromDigits(
+                                        cnpjLookupPreview.postalCode || "",
+                                        maskCep
+                                      ) || "-"}
+                                    </small>
+                                  </div>
+                                </div>
+                                <div className="cnpjConfirmItem">
+                                  <Checkbox
+                                    checked={cnpjApplySelection.cnae}
+                                    onChange={(event) =>
+                                      toggleCnpjApplySelection("cnae", event.target.checked)
+                                    }
+                                    label=""
+                                  />
+                                  <div>
+                                    <strong>CNAE principal</strong>
+                                    <small>
+                                      {cnpjLookupPreview.cnaeCode
+                                        ? `${cnpjLookupPreview.cnaeCode} - ${cnpjLookupPreview.cnaeDescription || ""}`
+                                        : "-"}
+                                    </small>
+                                  </div>
+                                </div>
+                              </div>
+                              {!hasAnyCnpjFieldSelected ? (
+                                <p className="feedbackError">
+                                  Selecione ao menos um campo para aplicar.
+                                </p>
+                              ) : null}
+                              <div className="actionsRow">
+                                <Button
+                                  type="button"
+                                  onClick={applyCnpjLookupData}
+                                  disabled={!hasAnyCnpjFieldSelected}
+                                >
+                                  Aplicar dados
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setCnpjLookupPreview(null)}
+                                >
+                                  Cancelar
+                                </Button>
+                              </div>
+                            </article>
+                          </div>
+                        ) : null}
                       </article>
                     </div>
                   ) : null}
-                </AdminCard>
+                </>
               ) : null}
 
               {configurationArea === "integrations" ? (
@@ -4029,7 +5527,7 @@ export default function HomePage() {
                       <div className="integrationMain">
                         <p className="integrationName">Google Calendar</p>
                         <p className="integrationDescription">
-                          Sincronização de agenda para negócios com modo Google.
+                          Sincronização de agenda para empresas com modo Google.
                         </p>
                       </div>
                       <div className="integrationMeta">
@@ -4090,99 +5588,441 @@ export default function HomePage() {
                 </AdminCard>
               ) : null}
 
-              {configurationArea === "calendar" ? (
+              {configurationArea === "plans" ? (
                 <AdminCard
                   className="full"
-                  title="Google Calendar"
-                  description="Opcional. Configure apenas para negócios com modo Google."
+                  title="Planos de assinatura"
+                  description="Defina preços, limites e recursos dos planos disponíveis para as empresas."
                 >
-                  <form className="form" onSubmit={handleSaveCalendarConnection}>
-                    <label>
-                      Calendar ID
-                      <Input
-                        value={calendarId}
-                        onChange={(event) => setCalendarId(event.target.value)}
-                        placeholder="primary"
-                        required
-                      />
-                    </label>
-                    <label>
-                      Access Token
-                      <Input
-                        value={accessToken}
-                        onChange={(event) => setAccessToken(event.target.value)}
-                        placeholder="Cole aqui se quiser atualizar manualmente"
-                      />
-                    </label>
-                    <label>
-                      Refresh Token
-                      <Input
-                        value={refreshToken}
-                        onChange={(event) => setRefreshToken(event.target.value)}
-                        placeholder="Cole aqui o refresh token"
-                      />
-                    </label>
-                    <label>
-                      Expira em (ISO)
-                      <Input
-                        value={tokenExpiresAt}
-                        onChange={(event) => setTokenExpiresAt(event.target.value)}
-                        placeholder="2026-12-31T23:59:59.000Z"
-                      />
-                    </label>
-                    <Button className="saveButton">Salvar conexão Google</Button>
-                    {calendarFeedback ? (
-                      <p className="feedbackOk">{calendarFeedback}</p>
-                    ) : null}
-                  </form>
+                  <DeveloperPlansAgGrid
+                    rowData={monetizationPlans}
+                    onCreated={async () => {
+                      await loadMonetizationPlans();
+                    }}
+                  />
+                </AdminCard>
+              ) : null}
+
+              {configurationArea === "integrations" ? (
+                <AdminCard
+                  className="full"
+                  title="Integrações da plataforma"
+                  description="Gerencie conexões e credenciais por empresa (WhatsApp e Google Calendar)."
+                >
+                  <div className="form">
+                    <form className="form" onSubmit={handleSaveCalendarConnection}>
+                      <label>
+                        Calendar ID
+                        <Input
+                          value={calendarId}
+                          onChange={(event) => setCalendarId(event.target.value)}
+                          placeholder="primary"
+                          required
+                        />
+                      </label>
+                      <label>
+                        Access Token
+                        <Input
+                          value={accessToken}
+                          onChange={(event) => setAccessToken(event.target.value)}
+                          placeholder="Cole aqui se quiser atualizar manualmente"
+                        />
+                      </label>
+                      <label>
+                        Refresh Token
+                        <Input
+                          value={refreshToken}
+                          onChange={(event) => setRefreshToken(event.target.value)}
+                          placeholder="Cole aqui o refresh token"
+                        />
+                      </label>
+                      <label>
+                        Expira em (ISO)
+                        <Input
+                          value={tokenExpiresAt}
+                          onChange={(event) => setTokenExpiresAt(event.target.value)}
+                          placeholder="2026-12-31T23:59:59.000Z"
+                        />
+                      </label>
+                      <Button className="saveButton">Salvar conexão Google</Button>
+                    </form>
+                    {calendarFeedback ? <p className="feedbackOk">{calendarFeedback}</p> : null}
+                  </div>
                 </AdminCard>
               ) : null}
             </>
           ) : (
             <>
               {dashboardArea === "overview" ? (
-                <AdminCard className="full" title="Visão geral">
-                  <div className="statsGrid">
-                    <MetricCard
-                      value={totalBusinesses}
-                      label="Negócios cadastrados"
-                      variant="indigo"
-                    />
-                    <MetricCard
-                      value={internalModeBusinesses}
-                      label="Em agenda interna"
-                      variant="rose"
-                    />
-                    <MetricCard
-                      value={googleModeBusinesses}
-                      label="Em Google Calendar"
-                      variant="emerald"
-                    />
-                  </div>
+                <>
+                <AdminCard
+                  className="full developerOverviewCard"
+                  title="Visão geral"
+                  description="Painel diário com foco em operação, urgências e comunicação."
+                >
+                  {developerPlatformSummaryLoading ? (
+                    <p className="helperText">Carregando métricas…</p>
+                  ) : null}
+                  {developerPlatformSummaryError ? (
+                    <p className="feedbackError">{developerPlatformSummaryError}</p>
+                  ) : null}
+                  {!developerPlatformSummaryLoading && !developerPlatformSummaryError ? (
+                    <>
+                      <div className="developerOverviewIntro">
+                        <p className="developerOverviewIntroLead">
+                          Volume do mês, pendências e contatos com a base. As linhas usam prioridade em
+                          cores, no estilo de um painel de operações.
+                        </p>
+                        <div className="developerOverviewIntroMeta">
+                          <span className="developerOverviewPill">
+                            {developerOverviewPanels.length} painéis ativos
+                          </span>
+                          <span className="developerOverviewPill developerOverviewPillAccent">
+                            Tempo real
+                          </span>
+                        </div>
+                      </div>
+                      <div className="developerOverviewGrid">
+                        {developerOverviewPanels.map((panel) => {
+                          const PanelIcon = DEVELOPER_OVERVIEW_ICONS[panel.tabId];
+                          return (
+                            <section
+                              key={panel.tabId}
+                              className={`developerOverviewPanel developerOverviewPanel--${panel.tabId}`}
+                            >
+                              <header className="developerOverviewPanelHead">
+                                <div className="developerOverviewPanelIcon" aria-hidden>
+                                  <PanelIcon strokeWidth={2} className="developerOverviewPanelIconSvg" />
+                                </div>
+                                <div className="developerOverviewPanelText">
+                                  <div className="developerOverviewPanelTitleRow">
+                                    <h3 className="developerOverviewPanelTitle">{panel.label}</h3>
+                                    <span className="metricInfoTooltipWrap metricInfoTooltipWrap--below" tabIndex={0}>
+                                      <span
+                                        className="metricInfoTooltipTrigger"
+                                        aria-label="Sobre este painel"
+                                      >
+                                        ?
+                                      </span>
+                                      <span className="metricInfoTooltipCard" role="tooltip">
+                                        {DEVELOPER_OVERVIEW_HINTS[panel.tabId]}
+                                      </span>
+                                    </span>
+                                  </div>
+                                  <p className="developerOverviewPanelSubtitle">{panel.caption}</p>
+                                </div>
+                                <div className="developerOverviewPanelStatWrap">
+                                  <div className="developerOverviewPanelStatBox">
+                                    <span className="developerOverviewPanelStatValue">{panel.value}</span>
+                                    <span className="developerOverviewPanelStatHint">{panel.valueHeader}</span>
+                                  </div>
+                                </div>
+                              </header>
+                              <div className="developerOverviewPanelScroll">
+                                <DeveloperMetricTable
+                                  rows={panel.rows}
+                                  valueHeader={panel.valueHeader}
+                                  emptyText={panel.emptyText}
+                                  onContactRow={(row: DeveloperMetricBreakdownRow) => {
+                                    setDeveloperCommunicationFocusBusinessId(row.id);
+                                    setDeveloperArea("dashboard");
+                                    setDashboardArea("communication");
+                                  }}
+                                />
+                              </div>
+                            </section>
+                          );
+                        })}
+                      </div>
+                    </>
+                  ) : null}
+                </AdminCard>
+              </>
+              ) : null}
+
+              {dashboardArea === "communication" ? (
+                <AdminCard
+                  className="full"
+                  title="Central de comunicação"
+                  description="Histórico unificado com cada empresa (um thread por negócio). Atalhos para WhatsApp e e-mail; registros com canal e direção para auditoria e futuras integrações."
+                >
+                  <DeveloperCommunicationHub
+                    businesses={businesses}
+                    focusBusinessId={developerCommunicationFocusBusinessId}
+                    onConsumedFocus={() => setDeveloperCommunicationFocusBusinessId(null)}
+                  />
                 </AdminCard>
               ) : null}
 
-              {dashboardArea === "businesses" ? (
+              {dashboardArea === "categories" ? (
                 <AdminCard
                   className="full"
-                  title="Negócios cadastrados"
-                  description="Aplique ajustes gerenciais no negócio selecionado."
+                  title="Gestão por categoria"
+                  description="Painel operacional por categoria."
                 >
                   <div className="form">
-                    <ul className="list">
-                      {businesses.map((business) => (
-                        <li key={business.id}>
-                          <span>{business.name}</span>
-                          <small>
-                            {business.slug} - {business.calendar_mode || "internal"}{" "}
-                            {business.cnpj ? `- CNPJ: ${business.cnpj}` : ""}
-                          </small>
-                        </li>
+                    <Tabs
+                      className="tabsRowOverflow"
+                      variant="segmented"
+                      aria-label="Categorias do painel do desenvolvedor"
+                      value={developerDashboardCategory}
+                      onChange={(v) => {
+                        if (DEVELOPER_DASHBOARD_CATEGORY_ITEMS.some((item) => item.value === v)) {
+                          setDeveloperDashboardCategory(v as DeveloperDashboardCategoryId);
+                        }
+                      }}
+                      items={DEVELOPER_DASHBOARD_CATEGORY_ITEMS}
+                    />
+                    <div className="periodUi periodUiB">
+                      <span className="periodUiLabel">Período</span>
+                      <div className="periodUiPresetGroup">
+                        <Button type="button" size="sm" variant="ghost" className={categoryAnalyticsRange === "30d" ? "isActive" : ""} onClick={() => applyPresetRange(30)}>30 dias</Button>
+                        <Button type="button" size="sm" variant="ghost" className={categoryAnalyticsRange === "60d" ? "isActive" : ""} onClick={() => applyPresetRange(60)}>60 dias</Button>
+                        <Button type="button" size="sm" variant="ghost" className={categoryAnalyticsRange === "90d" ? "isActive" : ""} onClick={() => applyPresetRange(90)}>90 dias</Button>
+                        <Button type="button" size="sm" variant="outline" onClick={() => { setCategoryAnalyticsRange("custom"); setCategoryPeriodLayerOpen((v) => !v); }}>
+                          Calendário
+                        </Button>
+                      </div>
+                      {categoryPeriodLayerOpen ? (
+                        <div className="periodUiLayer periodUiInline">
+                          <label className="categoryPeriodDateField categoryPeriodDateFieldInline">
+                            De
+                            <Input
+                              className="categoryPeriodDateInput"
+                              type="date"
+                              value={categoryAnalyticsStartDate}
+                              onChange={(event) => {
+                                setCategoryAnalyticsRange("custom");
+                                setCategoryAnalyticsStartDate(event.target.value);
+                              }}
+                              max={categoryAnalyticsEndDate || undefined}
+                            />
+                          </label>
+                          <label className="categoryPeriodDateField categoryPeriodDateFieldInline">
+                            Até
+                            <Input
+                              className="categoryPeriodDateInput"
+                              type="date"
+                              value={categoryAnalyticsEndDate}
+                              onChange={(event) => {
+                                setCategoryAnalyticsRange("custom");
+                                setCategoryAnalyticsEndDate(event.target.value);
+                              }}
+                              min={categoryAnalyticsStartDate || undefined}
+                            />
+                          </label>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: "10px",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                        marginTop: "10px",
+                      }}
+                    >
+                      {activeCategoryAnalytics.kpis.map((kpi) => (
+                        <article key={kpi.label} className="statCard">
+                          <span className="metricCardLabelRow">
+                            {kpi.label}
+                            {kpi.explain ? (
+                              <span className="metricInfoTooltipWrap" tabIndex={0}>
+                                <span className="metricInfoTooltipTrigger" aria-label="Mais informações">
+                                  ?
+                                </span>
+                                <span className="metricInfoTooltipCard" role="tooltip">
+                                  {kpi.explain}
+                                </span>
+                              </span>
+                            ) : null}
+                          </span>
+                          <strong>{kpi.value}</strong>
+                          <small className="helperText">{kpi.helper}</small>
+                        </article>
                       ))}
-                    </ul>
-                    <Button type="button" onClick={handleCalendarModeSave}>
-                      Salvar modo de agenda do negócio ativo
-                    </Button>
+                    </div>
+
+                    <div className="developerOverviewTableViewport">
+                      <DeveloperMetricTable
+                        rows={activeCategoryAnalytics.table.rows}
+                        valueHeader={activeCategoryAnalytics.table.valueHeader}
+                        emptyText={activeCategoryAnalytics.table.emptyText}
+                      />
+                    </div>
+
+                    {developerDashboardCategory === "subscriptions" ? (
+                      <div className="analyticsTableWrap">
+                        <p className="helperText" style={{ marginBottom: 8 }}>
+                          Feedbacks e solicitações das empresas sobre planos
+                        </p>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "6px",
+                            flexWrap: "wrap",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          {[
+                            { value: "all", label: "Todos" },
+                            { value: "pending", label: "Pendentes" },
+                            { value: "approved", label: "Aprovadas" },
+                            { value: "rejected", label: "Rejeitadas" },
+                            { value: "cancelled", label: "Canceladas" },
+                          ].map((item) => (
+                            <Button
+                              key={item.value}
+                              type="button"
+                              size="sm"
+                              variant={
+                                subscriptionFeedbackStatusFilter === item.value ? "primary" : "outline"
+                              }
+                              onClick={() =>
+                                setSubscriptionFeedbackStatusFilter(
+                                  item.value as SubscriptionFeedbackStatusFilter
+                                )
+                              }
+                            >
+                              {item.label}
+                            </Button>
+                          ))}
+                        </div>
+                        {subscriptionChangeFeedbacksError ? (
+                          <p className="feedbackError">{subscriptionChangeFeedbacksError}</p>
+                        ) : null}
+                        {!subscriptionChangeFeedbacksError &&
+                        subscriptionChangeFeedbacks.length === 0 ? (
+                          <p className="helperText">Sem feedbacks de plano no momento.</p>
+                        ) : null}
+                        {!subscriptionChangeFeedbacksError &&
+                        subscriptionChangeFeedbacks.length > 0 ? (
+                          <table className="analyticsTable">
+                            <thead>
+                              <tr>
+                                <th>Empresa</th>
+                                <th>Mudança</th>
+                                <th>Status</th>
+                                <th>Observação</th>
+                                <th>Data</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {subscriptionChangeFeedbacks.slice(0, 20).map((item) => (
+                                <tr key={item.id}>
+                                  <td>
+                                    <strong>{item.businessName}</strong>
+                                    {item.businessSlug ? (
+                                      <small className="helperText"> {item.businessSlug}</small>
+                                    ) : null}
+                                  </td>
+                                  <td>
+                                    {String(item.currentPlanCode || "free").toUpperCase()} →{" "}
+                                    {String(item.requestedPlanCode || "free").toUpperCase()}
+                                  </td>
+                                  <td>{item.status}</td>
+                                  <td>{item.note || "—"}</td>
+                                  <td>{new Date(item.createdAt).toLocaleDateString("pt-BR")}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {developerDashboardCategory === "companies" ? (
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: "10px",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                        }}
+                      >
+                        <div className="analyticsTableWrap">
+                          <p className="helperText" style={{ marginBottom: 8 }}>
+                            Distribuição por ramo/CNAE
+                          </p>
+                          <table className="analyticsTable">
+                            <thead>
+                              <tr>
+                                <th>Ramo/CNAE</th>
+                                <th>Empresas</th>
+                                <th>% base</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {businessesByCnae.slice(0, 8).map((row) => (
+                                <tr key={`cnae-${row.label}`}>
+                                  <td>{row.label}</td>
+                                  <td>{row.count}</td>
+                                  <td>{row.share.toFixed(1)}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="analyticsTableWrap">
+                          <p className="helperText" style={{ marginBottom: 8 }}>
+                            Distribuição por localização
+                          </p>
+                          <table className="analyticsTable">
+                            <thead>
+                              <tr>
+                                <th>Local</th>
+                                <th>Empresas</th>
+                                <th>% base</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {businessesByLocation.slice(0, 8).map((row) => (
+                                <tr key={`location-${row.label}`}>
+                                  <td>{row.label}</td>
+                                  <td>{row.count}</td>
+                                  <td>{row.share.toFixed(1)}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="analyticsTableWrap">
+                          <p className="helperText" style={{ marginBottom: 8 }}>
+                            Distribuição por plano de assinatura
+                          </p>
+                          <table className="analyticsTable">
+                            <thead>
+                              <tr>
+                                <th>Plano</th>
+                                <th>Empresas</th>
+                                <th>% base</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {businessesByPlan.map((row) => (
+                                <tr key={`plan-${row.label}`}>
+                                  <td>{row.label}</td>
+                                  <td>{row.count}</td>
+                                  <td>{row.share.toFixed(1)}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <details className="analyticsBlock" style={{ marginTop: "6px" }} open>
+                      <summary>Insights e ações recomendadas</summary>
+                      <ul className="list">
+                        {activeCategoryAnalytics.insights.map((insight) => (
+                          <li key={insight}>
+                            <small>{insight}</small>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
                   </div>
                 </AdminCard>
               ) : null}
@@ -4190,151 +6030,134 @@ export default function HomePage() {
           )}
             </div>
           </div>
-        </div>
+          </div>
+        </>
       ) : role === "owner" ? (
-        <div className="clientShell">
-          <aside className="clientSidebar card glassCard">
-            <div className="adminSidebarNav">
-              <p className="adminSidebarCaption">Dashboard</p>
-              <div className="adminSidebarSubnav">
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "dashboard" && clientDashboardArea === "overview"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("dashboard");
-                    setClientDashboardArea("overview");
-                  }}
-                >
-                  📊 Visão geral
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "dashboard" && clientDashboardArea === "analytics"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("dashboard");
-                    setClientDashboardArea("analytics");
-                  }}
-                >
-                  📈 Análises
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "dashboard" && clientDashboardArea === "agenda"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("dashboard");
-                    setClientDashboardArea("agenda");
-                  }}
-                >
-                  🗓️ Agenda
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "dashboard" && clientDashboardArea === "subscription"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("dashboard");
-                    setClientDashboardArea("subscription");
-                  }}
-                >
-                  💳 Assinatura
-                </button>
-              </div>
-              <p className="adminSidebarCaption">Configurações</p>
-              <div className="adminSidebarSubnav">
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "settings" && clientSettingsArea === "messages"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("settings");
-                    setClientSettingsArea("messages");
-                  }}
-                >
-                  💬 Comunicação
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "settings" && clientSettingsArea === "services"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("settings");
-                    setClientSettingsArea("services");
-                  }}
-                >
-                  🧰 Catálogo de serviços
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "settings" && clientSettingsArea === "hours"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("settings");
-                    setClientSettingsArea("hours");
-                  }}
-                >
-                  🕒 Agenda de atendimento
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "settings" && clientSettingsArea === "customers"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("settings");
-                    setClientSettingsArea("customers");
-                  }}
-                >
-                  👤 Clientes
-                </button>
-                <button
-                  type="button"
-                  className={`sidebarSubButton ${
-                    clientMainArea === "settings" && clientSettingsArea === "finance"
-                      ? "isActive"
-                      : ""
-                  }`}
-                  onClick={() => {
-                    setClientMainArea("settings");
-                    setClientSettingsArea("finance");
-                  }}
-                >
-                  👥 Financeiro (clientes)
-                </button>
-              </div>
+        <>
+          <aside className="modernSidebar">
+            <div className="modernSidebarBrand">
+              <div className="modernSidebarLogo" aria-hidden>A</div>
+              <span className="modernSidebarBrandName">Agendamento</span>
             </div>
-            <div className="adminSidebarFooter">
-              <span className="adminSidebarUser">Administrador</span>
-              <small>Painel de configuração</small>
+
+            <nav className="modernSidebarNav">
+              <p className="modernSidebarCaption">Dashboard</p>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "dashboard" && clientDashboardArea === "overview" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("dashboard"); setClientDashboardArea("overview"); }}
+              >
+                <span className="modernSidebarIcon"><LayoutDashboard size={16} /></span>
+                Visão geral
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "dashboard" && clientDashboardArea === "analytics" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("dashboard"); setClientDashboardArea("analytics"); }}
+              >
+                <span className="modernSidebarIcon"><TrendingUp size={16} /></span>
+                Análises
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "dashboard" && clientDashboardArea === "agenda" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("dashboard"); setClientDashboardArea("agenda"); }}
+              >
+                <span className="modernSidebarIcon"><BarChart2 size={16} /></span>
+                Agenda
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "dashboard" && clientDashboardArea === "subscription" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("dashboard"); setClientDashboardArea("subscription"); }}
+              >
+                <span className="modernSidebarIcon"><CreditCard size={16} /></span>
+                Assinatura
+              </button>
+
+              <p className="modernSidebarCaption">Configurações</p>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "messages" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("messages"); }}
+              >
+                <span className="modernSidebarIcon"><MessageSquare size={16} /></span>
+                Comunicação
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "services" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("services"); }}
+              >
+                <span className="modernSidebarIcon"><Package size={16} /></span>
+                Catálogo de serviços
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "hours" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("hours"); }}
+              >
+                <span className="modernSidebarIcon"><Clock size={16} /></span>
+                Agenda de atendimento
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "customers" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("customers"); }}
+              >
+                <span className="modernSidebarIcon"><Users size={16} /></span>
+                Clientes
+              </button>
+              <button
+                type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "finance" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("finance"); }}
+              >
+                <span className="modernSidebarIcon"><DollarSign size={16} /></span>
+                Financeiro
+              </button>
+            </nav>
+
+            <div className="modernSidebarFooter">
+              <div className="modernSidebarAvatar" aria-hidden>A</div>
+              <div className="modernSidebarFooterInfo">
+                <span>Administrador</span>
+                <small>Painel de configuração</small>
+              </div>
             </div>
           </aside>
 
-          <section className="grid clientGrid clientContent">
+          <div className="appMain">
+            <section className="hero card pageHeroSticky pageHeroCompact">
+              <div className="headerRow">
+                <h1 className="gradientText">
+                  {clientMainArea === "dashboard"
+                    ? clientDashboardArea === "overview"
+                      ? "Visão geral"
+                      : clientDashboardArea === "analytics"
+                        ? "Análises"
+                        : clientDashboardArea === "agenda"
+                          ? "Agenda"
+                          : "Assinatura"
+                    : clientSettingsArea === "messages"
+                      ? "Comunicação"
+                      : clientSettingsArea === "services"
+                        ? "Catálogo de serviços"
+                        : clientSettingsArea === "hours"
+                          ? "Agenda de atendimento"
+                          : clientSettingsArea === "customers"
+                            ? "Clientes"
+                            : "Financeiro"}
+                </h1>
+                <div className="headerActions">
+                  <ThemeToggle />
+                  <Button type="button" variant="outline" onClick={() => void handleLogout()}>
+                    Sair
+                  </Button>
+                </div>
+              </div>
+            </section>
+            <section className="grid clientGrid clientContent">
             {clientMainArea === "dashboard" &&
             (clientDashboardArea === "overview" ||
               clientDashboardArea === "analytics" ||
@@ -4465,6 +6288,22 @@ export default function HomePage() {
                 ) : null}
                 {clientDashboardArea === "overview" ? (
                   <div className="actionsRow">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={!selectedBusinessId}
+                      title={
+                        !selectedBusinessId
+                          ? "Selecione um negócio para registrar bloqueios"
+                          : "Férias, viagem ou pausa: bloqueia novos agendamentos no período"
+                      }
+                      onClick={() => setClosureModalOpen(true)}
+                    >
+                      <CalendarX size={15} aria-hidden />
+                      Bloquear agenda
+                    </Button>
                     <Button
                       type="button"
                       variant="outline"
@@ -5257,17 +7096,14 @@ export default function HomePage() {
                           ) : null}
                           <div className="detailsCards">
                             {selectedDateAppointments.map((appointment) => {
+                              const rules = resolveServiceRulesForAppointment(
+                                appointment.service_id
+                              );
                               const minutesToStart = Math.floor(
                                 (new Date(appointment.starts_at).getTime() - Date.now()) / 60000
                               );
-                              const cancelCutoff = Math.max(
-                                0,
-                                Number(bookingCancelCutoffMinutes) || 0
-                              );
-                              const rescheduleCutoff = Math.max(
-                                0,
-                                Number(bookingRescheduleCutoffMinutes) || 0
-                              );
+                              const cancelCutoff = rules.cancelCutoff;
+                              const rescheduleCutoff = rules.rescheduleCutoff;
                               const isCancelBlocked =
                                 cancelCutoff > 0 && minutesToStart < cancelCutoff;
                               const isShiftBlocked =
@@ -5416,16 +7252,21 @@ export default function HomePage() {
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    disabled={isActionBusy || !autoReturnEnabled}
-                                    onClick={() => void handleCreateAutoReturn(appointment.id)}
+                                    disabled={isActionBusy || !rules.autoReturnEnabled}
+                                    onClick={() =>
+                                      void handleCreateAutoReturn(
+                                        appointment.id,
+                                        rules.autoReturnDays
+                                      )
+                                    }
                                   >
-                                    Retorno +{Math.max(7, Number(autoReturnDays) || 30)}d
+                                    Retorno +{rules.autoReturnDays}d
                                   </Button>
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    disabled={isActionBusy || !checkinQrEnabled}
+                                    disabled={isActionBusy || !rules.checkinQrEnabled}
                                     onClick={() => void handleGenerateCheckinToken(appointment.id)}
                                   >
                                     Gerar QR
@@ -5434,7 +7275,7 @@ export default function HomePage() {
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    disabled={isActionBusy || !autoFeedbackEnabled}
+                                    disabled={isActionBusy || !rules.autoFeedbackEnabled}
                                     onClick={() => void handleSendPostFeedback(appointment.id)}
                                   >
                                     Enviar feedback
@@ -5522,6 +7363,76 @@ export default function HomePage() {
                 {subscriptionRequestFeedback ? (
                   <p className="feedbackOk">{subscriptionRequestFeedback}</p>
                 ) : null}
+                <div className="analyticsTableWrap">
+                  <p className="helperText" style={{ marginBottom: 8 }}>
+                    Histórico de solicitações de plano da sua empresa
+                  </p>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "6px",
+                      flexWrap: "wrap",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {[
+                      { value: "all", label: "Todos" },
+                      { value: "pending", label: "Pendentes" },
+                      { value: "approved", label: "Aprovadas" },
+                      { value: "rejected", label: "Rejeitadas" },
+                      { value: "cancelled", label: "Canceladas" },
+                    ].map((item) => (
+                      <Button
+                        key={`owner-filter-${item.value}`}
+                        type="button"
+                        size="sm"
+                        variant={
+                          ownerSubscriptionFeedbackStatusFilter === item.value
+                            ? "primary"
+                            : "outline"
+                        }
+                        onClick={() =>
+                          setOwnerSubscriptionFeedbackStatusFilter(
+                            item.value as SubscriptionFeedbackStatusFilter
+                          )
+                        }
+                      >
+                        {item.label}
+                      </Button>
+                    ))}
+                  </div>
+                  {ownerSubscriptionFeedbacksError ? (
+                    <p className="feedbackError">{ownerSubscriptionFeedbacksError}</p>
+                  ) : null}
+                  {!ownerSubscriptionFeedbacksError && ownerSubscriptionFeedbacks.length === 0 ? (
+                    <p className="helperText">Sem solicitações registradas para esta empresa.</p>
+                  ) : null}
+                  {!ownerSubscriptionFeedbacksError && ownerSubscriptionFeedbacks.length > 0 ? (
+                    <table className="analyticsTable">
+                      <thead>
+                        <tr>
+                          <th>Mudança</th>
+                          <th>Status</th>
+                          <th>Observação enviada</th>
+                          <th>Data</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ownerSubscriptionFeedbacks.slice(0, 20).map((item) => (
+                          <tr key={`owner-sub-feedback-${item.id}`}>
+                            <td>
+                              {String(item.currentPlanCode || "free").toUpperCase()} →{" "}
+                              {String(item.requestedPlanCode || "free").toUpperCase()}
+                            </td>
+                            <td>{item.status}</td>
+                            <td>{item.note || "—"}</td>
+                            <td>{new Date(item.createdAt).toLocaleDateString("pt-BR")}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : null}
+                </div>
                 {subscriptionModalOpen ? (
                   <div
                     className="detailsModalBackdrop"
@@ -5530,10 +7441,10 @@ export default function HomePage() {
                     }}
                   >
                     <article
-                      className="detailsModalCard serviceFormModal"
+                      className="detailsModalCard structuredFormModal"
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <div className="detailsPanelHeader">
+                      <div className="structuredFormModalHeader">
                         <h3 className="integrationName">Selecionar novo plano</h3>
                         <Button
                           type="button"
@@ -5545,7 +7456,7 @@ export default function HomePage() {
                           Fechar
                         </Button>
                       </div>
-                      <div className="list">
+                      <div className="structuredFormScroll list">
                         {monetizationPlans.map((plan) => (
                           <label key={plan.code} className="customersPaymentRow">
                             <input
@@ -5572,17 +7483,30 @@ export default function HomePage() {
                             </small>
                           </label>
                         ))}
+                        <label>
+                          Observação para o desenvolvedor (opcional)
+                          <Textarea
+                            rows={2}
+                            value={subscriptionRequestNote}
+                            onChange={(event) => setSubscriptionRequestNote(event.target.value)}
+                            placeholder="Ex.: aumento de equipe previsto para o próximo mês."
+                          />
+                        </label>
+                        {requestedPlanCode === planCode ? (
+                          <p className="helperText">
+                            Selecione um plano diferente do atual para enviar a solicitação.
+                          </p>
+                        ) : null}
                       </div>
-                      <label>
-                        Observação para o desenvolvedor (opcional)
-                        <Textarea
-                          rows={2}
-                          value={subscriptionRequestNote}
-                          onChange={(event) => setSubscriptionRequestNote(event.target.value)}
-                          placeholder="Ex.: aumento de equipe previsto para o próximo mês."
-                        />
-                      </label>
-                      <div className="actionsRow">
+                      <div className="structuredFormFooter">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setSubscriptionModalOpen(false)}
+                          disabled={subscriptionRequestSaving}
+                        >
+                          Cancelar
+                        </Button>
                         <Button
                           type="button"
                           onClick={() => void handleRequestSubscriptionChange()}
@@ -5596,20 +7520,7 @@ export default function HomePage() {
                             ? "Enviando..."
                             : "Confirmar e enviar solicitação"}
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => setSubscriptionModalOpen(false)}
-                          disabled={subscriptionRequestSaving}
-                        >
-                          Cancelar
-                        </Button>
                       </div>
-                      {requestedPlanCode === planCode ? (
-                        <p className="helperText">
-                          Selecione um plano diferente do atual para enviar a solicitação.
-                        </p>
-                      ) : null}
                     </article>
                   </div>
                 ) : null}
@@ -5910,6 +7821,59 @@ export default function HomePage() {
                       </>
                     ) : null}
                   </div>
+
+                  <div className="formGroup messageSection">
+                    <div className="messageSectionHeader">
+                      <h3>Publicação no Google Reviews</h3>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="messageSectionToggle"
+                        onClick={() =>
+                          setMessageSectionOpen((prev) => ({
+                            ...prev,
+                            reputation: !prev.reputation
+                          }))
+                        }
+                      >
+                        {messageSectionOpen.reputation ? "Recolher" : "Expandir"}
+                      </Button>
+                    </div>
+                    {messageSectionOpen.reputation ? (
+                      <>
+                        <p className="helperText">
+                          Quando o feedback automático estiver ativo na agenda, é possível incluir o link
+                          para avaliação no Google. Isso não altera os templates de mensagem salvo
+                          acima — apenas o cadastro do negócio.
+                        </p>
+                        <Checkbox
+                          checked={googleReviewsEnabled}
+                          onChange={(event) => setGoogleReviewsEnabled(event.target.checked)}
+                          label="Incluir link do Google na mensagem de avaliação: anexar URL de avaliação (Google) ao pós-atendimento"
+                        />
+                        <label>
+                          URL do estabelecimento no Google
+                          <Input
+                            type="url"
+                            value={googleReviewsUrl}
+                            onChange={(event) => setGoogleReviewsUrl(event.target.value)}
+                            placeholder="https://g.page/r/..."
+                          />
+                        </label>
+                        <div className="actionsRow">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void handleUpdateBusinessProfile()}
+                          >
+                            Salvar publicação no Google
+                          </Button>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+
                   <p className="helperText">
                     Variaveis disponiveis: {"{{cliente}}"}, {"{{data}}"}, {"{{inicio}}"}, {"{{fim}}"}, {"{{status}}"}, {"{{minutos}}"}, {"{{cupom}}"}, {"{{validade}}"}.
                   </p>
@@ -5927,30 +7891,9 @@ export default function HomePage() {
             {clientMainArea === "settings" && clientSettingsArea === "services" ? (
               <article className="card full">
                 <h2>Catálogo de serviços</h2>
-                <div className="servicesStatsGrid">
-                  <div className="servicesStatCard">
-                    <small>Total de serviços</small>
-                    <strong>{services.length}</strong>
-                  </div>
-                  <div className="servicesStatCard">
-                    <small>Serviços ativos</small>
-                    <strong>{activeServiceCount}</strong>
-                  </div>
-                  <div className="servicesStatCard">
-                    <small>Ticket médio</small>
-                    <strong>R$ {(serviceTicketMedio / 100).toFixed(2)}</strong>
-                  </div>
-                  <div className="servicesStatCard">
-                    <small>Categorias</small>
-                    <strong>{serviceCategories.length}</strong>
-                  </div>
-                  <div className="servicesStatCard">
-                    <small>Com fotos</small>
-                    <strong>{servicesWithImagesCount}</strong>
-                  </div>
-                </div>
+                {/* Dev: lista completa de ramos; em produção manter só o botão "Visualizar template" (CNAE) na barra da grade. */}
                 <div className="servicesTemplatesRow">
-                  <small>Templates rápidos:</small>
+                  <small>Templates rápidos (dev):</small>
                   {Object.keys(SERVICE_TEMPLATES).map((templateName) => (
                     <Button
                       key={templateName}
@@ -5968,17 +7911,9 @@ export default function HomePage() {
                       {templateName === suggestedTemplateByBusiness ? " (sugerido)" : ""}
                     </Button>
                   ))}
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    onClick={openCreateServiceModal}
-                  >
-                    + Novo serviço
-                  </Button>
                 </div>
                 {serviceTemplatePreviewName ? (
-                  <div className="servicesTemplatePreview">
+                  <div className="servicesTemplatePreview" id="service-template-preview">
                     <div className="servicesTemplatePreviewHeader">
                       <strong>Sugestão de template: {serviceTemplatePreviewName}</strong>
                       <small>Selecione o que você quer adicionar</small>
@@ -6018,532 +7953,693 @@ export default function HomePage() {
                     </div>
                   </div>
                 ) : null}
-                <form className="form" onSubmit={handleCreateService}>
-                  <label>
-                    Nome do serviço
-                    <Input
-                      value={serviceName}
-                      onChange={(event) => setServiceName(event.target.value)}
-                      placeholder="Ex.: Corte masculino"
-                      required
-                    />
-                  </label>
-                  <label>
-                    Categoria
-                    <Input
-                      value={serviceCategory}
-                      onChange={(event) => setServiceCategory(event.target.value)}
-                      placeholder="Ex.: Cabelo, Estética, Consultoria..."
-                    />
-                  </label>
-                  <label>
-                    Descrição
-                    <Textarea
-                      rows={2}
-                      value={serviceDescription}
-                      onChange={(event) => setServiceDescription(event.target.value)}
-                      placeholder="Descreva o que está incluído neste serviço..."
-                    />
-                  </label>
-                  <label>
-                    Duração (minutos)
-                    <Input
-                      type="number"
-                      min={5}
-                      step={5}
-                      value={serviceDuration}
-                      onChange={(event) => setServiceDuration(event.target.value)}
-                      required
-                    />
-                  </label>
-                  <label>
-                    Preço (R$)
-                    <Input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={servicePrice}
-                      onChange={(event) => setServicePrice(event.target.value)}
-                      placeholder="Opcional"
-                    />
-                  </label>
-                  <label>
-                    Ícone
-                    <div className="servicesPickerRow">
-                      {SERVICE_ICONS.map((icon) => (
-                        <button
-                          key={`new-icon-${icon}`}
-                          type="button"
-                          className={`servicesIconOption ${
-                            serviceIcon === icon ? "isSelected" : ""
-                          }`}
-                          onClick={() => setServiceIcon(icon)}
-                        >
-                          {icon}
-                        </button>
-                      ))}
-                    </div>
-                  </label>
-                  <label>
-                    Cor
-                    <div className="servicesPickerRow">
-                      {SERVICE_COLORS.map((color) => (
-                        <button
-                          key={`new-color-${color}`}
-                          type="button"
-                          className={`servicesColorOption ${
-                            serviceColor === color ? "isSelected" : ""
-                          }`}
-                          style={{ background: color }}
-                          onClick={() => setServiceColor(color)}
-                          aria-label={`Cor ${color}`}
-                        />
-                      ))}
-                    </div>
-                  </label>
-                  <label>
-                    Fotos (até 5)
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      disabled={serviceUploadLoading || serviceImages.length >= 5}
-                      onChange={(event) =>
-                        void handleUploadServiceImages(event.target.files, "new")
-                      }
-                    />
-                    {serviceImages.length > 0 ? (
-                      <div className="servicesImagesGrid">
-                        {serviceImages.map((url, index) => (
-                          <div key={`new-image-${index}`} className="servicesImagePreview">
-                            <img src={url} alt={`Imagem ${index + 1}`} />
-                            <button
-                              type="button"
-                              className="servicesImageRemove"
-                              onClick={() => removeServiceImage("new", index)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </label>
-                  <Button className="saveButton">Adicionar serviço</Button>
-                  {serviceFeedback ? <p className="feedbackOk">{serviceFeedback}</p> : null}
-                </form>
-
-                {editingServiceId ? (
-                  <form className="form editBlock" onSubmit={handleUpdateService}>
-                    <h3>Editar serviço</h3>
-                    <label>
-                      Nome do serviço
-                      <Input
-                        value={editingName}
-                        onChange={(event) => setEditingName(event.target.value)}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Categoria
-                      <Input
-                        value={editingCategory}
-                        onChange={(event) => setEditingCategory(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Descrição
-                      <Textarea
-                        rows={2}
-                        value={editingDescription}
-                        onChange={(event) => setEditingDescription(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Duração (minutos)
-                      <Input
-                        type="number"
-                        min={5}
-                        step={5}
-                        value={editingDuration}
-                        onChange={(event) => setEditingDuration(event.target.value)}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Preço (R$)
-                      <Input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        value={editingPrice}
-                        onChange={(event) => setEditingPrice(event.target.value)}
-                        placeholder="Opcional"
-                      />
-                    </label>
-                    <label>
-                      Ícone
-                      <div className="servicesPickerRow">
-                        {SERVICE_ICONS.map((icon) => (
-                          <button
-                            key={`edit-icon-${icon}`}
-                            type="button"
-                            className={`servicesIconOption ${
-                              editingIcon === icon ? "isSelected" : ""
-                            }`}
-                            onClick={() => setEditingIcon(icon)}
-                          >
-                            {icon}
-                          </button>
-                        ))}
-                      </div>
-                    </label>
-                    <label>
-                      Cor
-                      <div className="servicesPickerRow">
-                        {SERVICE_COLORS.map((color) => (
-                          <button
-                            key={`edit-color-${color}`}
-                            type="button"
-                            className={`servicesColorOption ${
-                              editingColor === color ? "isSelected" : ""
-                            }`}
-                            style={{ background: color }}
-                            onClick={() => setEditingColor(color)}
-                          />
-                        ))}
-                      </div>
-                    </label>
-                    <label>
-                      Fotos (até 5)
-                      <Input
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        disabled={serviceUploadLoading || editingImages.length >= 5}
-                        onChange={(event) =>
-                          void handleUploadServiceImages(event.target.files, "edit")
-                        }
-                      />
-                      {editingImages.length > 0 ? (
-                        <div className="servicesImagesGrid">
-                          {editingImages.map((url, index) => (
-                            <div key={`edit-image-${index}`} className="servicesImagePreview">
-                              <img src={url} alt={`Imagem ${index + 1}`} />
-                              <button
-                                type="button"
-                                className="servicesImageRemove"
-                                onClick={() => removeServiceImage("edit", index)}
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </label>
-                    <div className="actionsRow">
-                      <Button className="saveButton">Salvar alterações</Button>
-                      <Button type="button" variant="outline" onClick={cancelEditingService}>
-                        Cancelar
-                      </Button>
-                    </div>
-                  </form>
-                ) : null}
-
-                <div className="servicesFilters">
-                  <Input
-                    value={serviceSearch}
-                    onChange={(event) => setServiceSearch(event.target.value)}
-                    placeholder="Buscar serviço..."
-                  />
-                  <Select
-                    value={serviceCategoryFilter}
-                    onChange={(event) => setServiceCategoryFilter(event.target.value)}
-                  >
-                    <option value="">Todas categorias</option>
-                    {serviceCategories.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </Select>
-                  <Select
-                    value={serviceStatusFilter}
-                    onChange={(event) =>
-                      setServiceStatusFilter(event.target.value as "" | "active" | "inactive")
+                <p className="helperText">
+                  Mesmo padrão de empresas e agendas: busca rápida na barra, colunas opcionais,
+                  exportação, <strong>Visualizar template de serviços</strong> (ramo/CNAE) e{" "}
+                  <strong>Adicionar serviço</strong>. O resumo (totais, ticket médio, categorias,
+                  fotos) fica acima da grade. Filtre por nome, categoria ou status pela busca e pelas
+                  colunas. Cadastro no modal: Informações, Tempos e regras e{" "}
+                  <strong>Visual e fotos</strong>.
+                </p>
+                <OwnerServicesAgGrid
+                  rowData={services}
+                  onAddService={openCreateServiceModal}
+                  onViewServiceTemplate={() => {
+                    const key = suggestedTemplateByBusiness;
+                    if (key && SERVICE_TEMPLATES[key]) {
+                      openServiceTemplateSuggestion(key);
+                      setServiceFeedback("");
+                      requestAnimationFrame(() => {
+                        requestAnimationFrame(() => {
+                          document
+                            .getElementById("service-template-preview")
+                            ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                        });
+                      });
+                      return;
                     }
-                  >
-                    <option value="">Todos status</option>
-                    <option value="active">Ativos</option>
-                    <option value="inactive">Inativos</option>
-                  </Select>
-                  <div className="servicesViewToggle">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={servicesViewMode === "list" ? "primary" : "outline"}
-                      onClick={() => setServicesViewMode("list")}
-                    >
-                      Lista
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={servicesViewMode === "grid" ? "primary" : "outline"}
-                      onClick={() => setServicesViewMode("grid")}
-                    >
-                      Grade
-                    </Button>
-                  </div>
-                </div>
-
-                {filteredServices.length === 0 ? (
-                  <ul className="list">
-                    <li>
-                      <span>Nenhum serviço encontrado.</span>
-                      <small>Ajuste os filtros ou crie um novo serviço.</small>
-                    </li>
-                  </ul>
-                ) : (
-                  <div
-                    className={
-                      servicesViewMode === "grid"
-                        ? "servicesCardsGrid servicesCardsGridView"
-                        : "servicesCardsGrid"
-                    }
-                  >
-                    {filteredServices.map((service) => (
-                      <article
-                        key={service.id}
-                        className={`serviceCatalogCard ${service.is_active ? "" : "isInactive"}`}
-                        style={{
-                          borderLeftColor: service.color || "#3B82F6"
-                        }}
-                        draggable={servicesViewMode === "list"}
-                        onDragStart={(event) =>
-                          event.dataTransfer.setData("text/service-id", service.id)
-                        }
-                        onDragOver={(event) => {
-                          if (servicesViewMode === "list") event.preventDefault();
-                        }}
-                        onDrop={(event) => {
-                          if (servicesViewMode !== "list") return;
-                          event.preventDefault();
-                          const sourceId = event.dataTransfer.getData("text/service-id");
-                          void handleDropReorderService(sourceId, service.id);
-                        }}
-                      >
-                        <div className="serviceCatalogHeader">
-                          <div className="serviceCatalogTitle">
-                            {service.image_urls?.[0] ? (
-                              <img
-                                src={service.image_urls[0]}
-                                alt={service.name}
-                                className="serviceCatalogCover"
-                              />
-                            ) : (
-                              <span className="serviceCatalogIcon">{service.icon || "✂️"}</span>
-                            )}
-                            <div>
-                              <strong>{service.name}</strong>
-                              {service.category ? (
-                                <small className="serviceCatalogTag">{service.category}</small>
-                              ) : null}
-                              {service.image_urls?.length ? (
-                                <small className="serviceCatalogTag">
-                                  📸 {service.image_urls.length}
-                                </small>
-                              ) : null}
-                            </div>
-                          </div>
-                          <Checkbox
-                            label={service.is_active ? "Ativo" : "Inativo"}
-                            checked={service.is_active}
-                            onChange={() => void handleToggleServiceActive(service)}
-                          />
-                        </div>
-                        {service.description ? (
-                          <p className="serviceCatalogDescription">{service.description}</p>
-                        ) : null}
-                        <div className="serviceCatalogMeta">
-                          <small>{service.duration_minutes} min</small>
-                          <strong>
-                            {typeof service.price_cents === "number"
-                              ? `R$ ${(service.price_cents / 100).toFixed(2)}`
-                              : "Preço sob consulta"}
-                          </strong>
-                        </div>
-                        <div className="serviceCatalogActions">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEditServiceModal(service)}
-                          >
-                            Editar
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void handleDuplicateService(service)}
-                          >
-                            Duplicar
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void handleMoveService(service, -1)}
-                          >
-                            ↑
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void handleMoveService(service, 1)}
-                          >
-                            ↓
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void handleDeleteService(service.id)}
-                          >
-                            Excluir
-                          </Button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                )}
+                    setServiceFeedback(
+                      "Não há template sugerido: cadastre o CNAE da empresa em Configurações (dados cadastrais) para vincular o ramo e exibir o pacote de serviços sugerido."
+                    );
+                  }}
+                  onEditRow={(row) => {
+                    const full = services.find((s) => s.id === row.id);
+                    if (full) openEditServiceModal(full);
+                  }}
+                  onToggleActive={(row) => {
+                    const full = services.find((s) => s.id === row.id);
+                    if (full) void handleToggleServiceActive(full);
+                  }}
+                  onDuplicate={(row) => {
+                    const full = services.find((s) => s.id === row.id);
+                    if (full) void handleDuplicateService(full);
+                  }}
+                  onMove={(row, direction) => {
+                    const full = services.find((s) => s.id === row.id);
+                    if (full) void handleMoveService(full, direction);
+                  }}
+                />
+                {serviceFeedback ? <p className="feedbackOk">{serviceFeedback}</p> : null}
 
                 {serviceModalOpen ? (
                   <div className="detailsModalBackdrop" onClick={closeServiceModal}>
                     <article
-                      className="detailsModalCard serviceFormModal"
+                      className="detailsModalCard structuredFormModal structuredFormModal--tall structuredFormModal--serviceCatalog"
                       onClick={(event) => event.stopPropagation()}
                     >
-                      <div className="detailsPanelHeader">
-                        <h3 className="integrationName">
-                          {serviceModalMode === "create" ? "Novo serviço" : "Editar serviço"}
-                        </h3>
+                      <div className="structuredFormModalHeader">
+                        <div>
+                          <h3 className="integrationName">
+                            {serviceModalMode === "create" ? "Novo serviço" : "Editar serviço"}
+                          </h3>
+                          <p className="structuredFormModalSubtitle">
+                            {serviceModalMode === "create"
+                              ? "Defina identidade, tempos de agenda e aparência. Tudo fica salvo no catálogo desta empresa."
+                              : "Alterações passam a valer para novas reservas e para regras aplicadas pela API."}
+                          </p>
+                        </div>
                         <Button type="button" variant="outline" size="sm" onClick={closeServiceModal}>
                           Fechar
                         </Button>
                       </div>
-                      <div className="servicesModalTabs">
-                        <button
-                          type="button"
-                          className={serviceModalTab === "info" ? "isActive" : ""}
-                          onClick={() => setServiceModalTab("info")}
-                        >
-                          Informações
-                        </button>
-                        <button
-                          type="button"
-                          className={serviceModalTab === "visual" ? "isActive" : ""}
-                          onClick={() => setServiceModalTab("visual")}
-                        >
-                          Visual
-                        </button>
-                        <button
-                          type="button"
-                          className={serviceModalTab === "images" ? "isActive" : ""}
-                          onClick={() => setServiceModalTab("images")}
-                        >
-                          Fotos
-                        </button>
+                      <div className="structuredFormTabsTrack">
+                        <div className="structuredFormTabs" role="tablist" aria-label="Seções do serviço">
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={serviceModalTab === "info"}
+                            className={serviceModalTab === "info" ? "isActive" : ""}
+                            onClick={() => setServiceModalTab("info")}
+                          >
+                            Informações
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={serviceModalTab === "agenda"}
+                            className={serviceModalTab === "agenda" ? "isActive" : ""}
+                            onClick={() => setServiceModalTab("agenda")}
+                          >
+                            Tempos e regras
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={serviceModalTab === "visual"}
+                            className={serviceModalTab === "visual" ? "isActive" : ""}
+                            onClick={() => setServiceModalTab("visual")}
+                          >
+                            Visual e fotos
+                          </button>
+                        </div>
                       </div>
-                      <div className="form">
+                      <div className="form structuredFormScroll">
                         {serviceModalTab === "info" ? (
                           <>
-                            <label>
-                              Nome do serviço
-                              <Input
-                                value={serviceModalMode === "create" ? serviceName : editingName}
-                                onChange={(event) =>
-                                  serviceModalMode === "create"
-                                    ? setServiceName(event.target.value)
-                                    : setEditingName(event.target.value)
-                                }
-                              />
-                            </label>
-                            <label>
-                              Categoria
-                              <Input
-                                value={
-                                  serviceModalMode === "create"
-                                    ? serviceCategory
-                                    : editingCategory
-                                }
-                                onChange={(event) =>
-                                  serviceModalMode === "create"
-                                    ? setServiceCategory(event.target.value)
-                                    : setEditingCategory(event.target.value)
-                                }
-                              />
-                            </label>
-                            <label>
-                              Descrição
-                              <Textarea
-                                rows={2}
-                                value={
-                                  serviceModalMode === "create"
-                                    ? serviceDescription
-                                    : editingDescription
-                                }
-                                onChange={(event) =>
-                                  serviceModalMode === "create"
-                                    ? setServiceDescription(event.target.value)
-                                    : setEditingDescription(event.target.value)
-                                }
-                              />
-                            </label>
-                            <div className="servicesModalTwoCols">
-                              <label>
-                                Duração (min)
-                                <Input
-                                  type="number"
-                                  min={5}
-                                  step={5}
-                                  value={
-                                    serviceModalMode === "create"
-                                      ? serviceDuration
-                                      : editingDuration
-                                  }
-                                  onChange={(event) =>
-                                    serviceModalMode === "create"
-                                      ? setServiceDuration(event.target.value)
-                                      : setEditingDuration(event.target.value)
-                                  }
-                                />
-                              </label>
-                              <label>
-                                Preço (R$)
-                                <Input
-                                  type="number"
-                                  min={0}
-                                  step="0.01"
-                                  value={
-                                    serviceModalMode === "create" ? servicePrice : editingPrice
-                                  }
-                                  onChange={(event) =>
-                                    serviceModalMode === "create"
-                                      ? setServicePrice(event.target.value)
-                                      : setEditingPrice(event.target.value)
-                                  }
-                                />
-                              </label>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Identificação
+                                <HelpHint placement="below" label="Sobre identificação do serviço">
+                                  Como o cliente vê este serviço no site e no WhatsApp.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                                <label>
+                                  Nome do serviço
+                                  <Input
+                                    value={serviceModalMode === "create" ? serviceName : editingName}
+                                    onChange={(event) =>
+                                      serviceModalMode === "create"
+                                        ? setServiceName(event.target.value)
+                                        : setEditingName(event.target.value)
+                                    }
+                                    placeholder="Ex.: Corte masculino"
+                                  />
+                                </label>
+                                <label>
+                                  Categoria
+                                  <Input
+                                    value={
+                                      serviceModalMode === "create"
+                                        ? serviceCategory
+                                        : editingCategory
+                                    }
+                                    onChange={(event) =>
+                                      serviceModalMode === "create"
+                                        ? setServiceCategory(event.target.value)
+                                        : setEditingCategory(event.target.value)
+                                    }
+                                    placeholder="Ex.: Cabelo, Combo, Consulta"
+                                  />
+                                </label>
+                                <label>
+                                  Descrição
+                                  <Textarea
+                                    rows={3}
+                                    value={
+                                      serviceModalMode === "create"
+                                        ? serviceDescription
+                                        : editingDescription
+                                    }
+                                    onChange={(event) =>
+                                      serviceModalMode === "create"
+                                        ? setServiceDescription(event.target.value)
+                                        : setEditingDescription(event.target.value)
+                                    }
+                                    placeholder="O que está incluso, materiais usados ou observações."
+                                  />
+                                </label>
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Sessão e valor
+                                <HelpHint placement="below" label="Sobre duração e preço">
+                                  A duração entra na grade; o preço é opcional (sob consulta).
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                                <div className="structuredFormTwoCols">
+                                  <label>
+                                    Duração (min)
+                                    <Input
+                                      type="number"
+                                      min={5}
+                                      step={5}
+                                      value={
+                                        serviceModalMode === "create"
+                                          ? serviceDuration
+                                          : editingDuration
+                                      }
+                                      onChange={(event) =>
+                                        serviceModalMode === "create"
+                                          ? setServiceDuration(event.target.value)
+                                          : setEditingDuration(event.target.value)
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Preço (R$)
+                                    <Input
+                                      type="number"
+                                      min={0}
+                                      step="0.01"
+                                      value={
+                                        serviceModalMode === "create"
+                                          ? servicePrice
+                                          : editingPrice
+                                      }
+                                      onChange={(event) =>
+                                        serviceModalMode === "create"
+                                          ? setServicePrice(event.target.value)
+                                          : setEditingPrice(event.target.value)
+                                      }
+                                      placeholder="Opcional"
+                                    />
+                                  </label>
+                                </div>
+                              </div>
+                            </section>
+                            <div className="serviceModalTimeRulesHint">
+                              <p className="helperText">
+                                Buffers, antecedência, lembretes, cutoffs, campanhas e experiência do
+                                fluxo ficam em <strong>Tempos e regras</strong>. Ícone, cor e fotos em{" "}
+                                <strong>Visual e fotos</strong>.
+                              </p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setServiceModalTab("agenda")}
+                              >
+                                Ir para tempos e regras
+                              </Button>
                             </div>
                           </>
                         ) : null}
 
+                        {serviceModalTab === "agenda" ? (
+                          <div className="serviceFormAgendaLayout hoursRulesGrid">
+                            <p className="serviceFormIntro">
+                              Defina como este serviço usa a agenda, comunica com o cliente e entra nas
+                              automações — sempre isolado dos demais itens do catálogo.
+                            </p>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Capacidade e reservas
+                                <HelpHint placement="below" label="Sobre capacidade e reservas">
+                                  Intervalos na grade, antecedência de marcação e fila de espera.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                                <label>
+                                  Tempo de preparação antes (min)
+                                  <Input
+                                    type="number"
+                                    min={0}
+                                    step={5}
+                                    value={
+                                      serviceModalMode === "create"
+                                        ? serviceBookingBufferBefore
+                                        : editingBookingBufferBefore
+                                    }
+                                    onChange={(event) =>
+                                      serviceModalMode === "create"
+                                        ? setServiceBookingBufferBefore(event.target.value)
+                                        : setEditingBookingBufferBefore(event.target.value)
+                                    }
+                                  />
+                                </label>
+                                <label>
+                                  Tempo de limpeza/descanso depois (min)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={5}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceBookingBufferAfter
+                                    : editingBookingBufferAfter
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceBookingBufferAfter(event.target.value)
+                                    : setEditingBookingBufferAfter(event.target.value)
+                                }
+                              />
+                            </label>
+                            <label>
+                              Antecedência mínima para agendar (min)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={5}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceBookingMinNotice
+                                    : editingBookingMinNotice
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceBookingMinNotice(event.target.value)
+                                    : setEditingBookingMinNotice(event.target.value)
+                                }
+                              />
+                            </label>
+                            <label>
+                              Janela máxima para agendar (dias)
+                              <Input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceBookingMaxDays
+                                    : editingBookingMaxDays
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceBookingMaxDays(event.target.value)
+                                    : setEditingBookingMaxDays(event.target.value)
+                                }
+                              />
+                            </label>
+                            <label>
+                              Limite diário de agendamentos (opcional)
+                              <Input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceBookingDailyLimit
+                                    : editingBookingDailyLimit
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceBookingDailyLimit(event.target.value)
+                                    : setEditingBookingDailyLimit(event.target.value)
+                                }
+                                placeholder="Sem limite"
+                              />
+                            </label>
+                            <label>
+                              Capacidade simultânea por horário
+                              <Input
+                                type="number"
+                                min={1}
+                                max={50}
+                                step={1}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceBookingSlotCapacity
+                                    : editingBookingSlotCapacity
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceBookingSlotCapacity(event.target.value)
+                                    : setEditingBookingSlotCapacity(event.target.value)
+                                }
+                              />
+                            </label>
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceWaitlistEnabled
+                                  : editingWaitlistEnabled
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceWaitlistEnabled(event.target.checked)
+                                  : setEditingWaitlistEnabled(event.target.checked)
+                              }
+                              label="Lista de espera automatizada: permitir fila quando os horários estiverem esgotados"
+                            />
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Lembretes ao cliente
+                                <HelpHint placement="below" label="Sobre lembretes">
+                                  Avisos automáticos antes do horário do atendimento.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceReminder24h
+                                  : editingReminder24h
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceReminder24h(event.target.checked)
+                                  : setEditingReminder24h(event.target.checked)
+                              }
+                              label="Lembrete 24h antes: enviar aviso de que o agendamento é amanhã"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceReminder2h
+                                  : editingReminder2h
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceReminder2h(event.target.checked)
+                                  : setEditingReminder2h(event.target.checked)
+                              }
+                              label="Lembrete 2h antes: enviar lembrete próximo ao horário"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceReminder30m
+                                  : editingReminder30m
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceReminder30m(event.target.checked)
+                                  : setEditingReminder30m(event.target.checked)
+                              }
+                              label="Lembrete 30min antes: enviar confirmação de deslocamento"
+                            />
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Confirmação de presença
+                                <HelpHint placement="below" label="Sobre confirmação de presença">
+                                  Exigência e prazo para o cliente confirmar que comparecerá.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceAttendanceRequired
+                                  : editingAttendanceRequired
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceAttendanceRequired(event.target.checked)
+                                  : setEditingAttendanceRequired(event.target.checked)
+                              }
+                              label="Confirmação obrigatória de presença: exigir confirmação antes do atendimento"
+                            />
+                            <label>
+                              Prazo para confirmar presença (min antes)
+                              <Input
+                                type="number"
+                                min={60}
+                                max={10080}
+                                step={30}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceAttendanceDeadline
+                                    : editingAttendanceDeadline
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceAttendanceDeadline(event.target.value)
+                                    : setEditingAttendanceDeadline(event.target.value)
+                                }
+                              />
+                            </label>
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceAutoRelease
+                                  : editingAutoRelease
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceAutoRelease(event.target.checked)
+                                  : setEditingAutoRelease(event.target.checked)
+                              }
+                              label="Liberação automática por falta de confirmação: liberar horário se o cliente não confirmar"
+                            />
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Reagendar e cancelar
+                                <HelpHint placement="below" label="Sobre reagendar e cancelar">
+                                  Mínimos antes do início para mudanças via painel e API (ações rápidas).
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <label>
+                              Limite para reagendar (min antes do início)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={5}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceRescheduleCutoff
+                                    : editingRescheduleCutoff
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceRescheduleCutoff(event.target.value)
+                                    : setEditingRescheduleCutoff(event.target.value)
+                                }
+                              />
+                            </label>
+                            <label>
+                              Limite para cancelar (min antes do início)
+                              <Input
+                                type="number"
+                                min={0}
+                                step={5}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceCancelCutoff
+                                    : editingCancelCutoff
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceCancelCutoff(event.target.value)
+                                    : setEditingCancelCutoff(event.target.value)
+                                }
+                              />
+                            </label>
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Pós-atendimento e campanhas
+                                <HelpHint placement="below" label="Sobre pós-atendimento e campanhas">
+                                  n8n e demais automações usam os templates da empresa; aqui você define
+                                  se este serviço entra em cada fluxo.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? servicePostVisitThankYou
+                                  : editingPostVisitThankYou
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServicePostVisitThankYou(event.target.checked)
+                                  : setEditingPostVisitThankYou(event.target.checked)
+                              }
+                              label="Pós-atendimento (agradecimento + avaliação): enviar mensagem após atendimento concluído"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? servicePostVisitCoupon
+                                  : editingPostVisitCoupon
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServicePostVisitCoupon(event.target.checked)
+                                  : setEditingPostVisitCoupon(event.target.checked)
+                              }
+                              label="Pós-atendimento (cupom próxima visita): enviar incentivo para retorno"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceRemarketing
+                                  : editingRemarketing
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceRemarketing(event.target.checked)
+                                  : setEditingRemarketing(event.target.checked)
+                              }
+                              label="Campanhas de remarketing: incluir clientes deste serviço em remarketing"
+                            />
+                            <label>
+                              Inatividade para remarketing (dias)
+                              <Input
+                                type="number"
+                                min={7}
+                                max={365}
+                                step={1}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceRemarketingInactiveDays
+                                    : editingRemarketingInactiveDays
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceRemarketingInactiveDays(event.target.value)
+                                    : setEditingRemarketingInactiveDays(event.target.value)
+                                }
+                              />
+                            </label>
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceAutoReturn
+                                  : editingAutoReturn
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceAutoReturn(event.target.checked)
+                                  : setEditingAutoReturn(event.target.checked)
+                              }
+                              label="Auto-agendamento de retorno: permitir retorno em 1 clique para este serviço"
+                            />
+                            <label>
+                              Dias sugeridos para retorno
+                              <Input
+                                type="number"
+                                min={7}
+                                max={120}
+                                step={1}
+                                value={
+                                  serviceModalMode === "create"
+                                    ? serviceAutoReturnDays
+                                    : editingAutoReturnDays
+                                }
+                                onChange={(event) =>
+                                  serviceModalMode === "create"
+                                    ? setServiceAutoReturnDays(event.target.value)
+                                    : setEditingAutoReturnDays(event.target.value)
+                                }
+                              />
+                            </label>
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create" ? serviceBirthday : editingBirthday
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceBirthday(event.target.checked)
+                                  : setEditingBirthday(event.target.checked)
+                              }
+                              label="Mensagem de aniversário: incluir clientes que agendaram este serviço na campanha de aniversário"
+                            />
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Experiência no fluxo
+                                <HelpHint placement="below" label="Sobre experiência no fluxo">
+                                  Reagendamento assistido, check-in e pedido de avaliação após o
+                                  atendimento.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceOneClickReschedule
+                                  : editingOneClickReschedule
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceOneClickReschedule(event.target.checked)
+                                  : setEditingOneClickReschedule(event.target.checked)
+                              }
+                              label="Reagendamento assistido (WhatsApp): permitir envio de nova sugestão de horário com confirmação por SIM"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create" ? serviceCheckinQr : editingCheckinQr
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceCheckinQr(event.target.checked)
+                                  : setEditingCheckinQr(event.target.checked)
+                              }
+                              label="Check-in por QR code: gerar token de check-in para agendamentos deste serviço"
+                            />
+                            <Checkbox
+                              checked={
+                                serviceModalMode === "create"
+                                  ? serviceAutoFeedback
+                                  : editingAutoFeedback
+                              }
+                              onChange={(event) =>
+                                serviceModalMode === "create"
+                                  ? setServiceAutoFeedback(event.target.checked)
+                                  : setEditingAutoFeedback(event.target.checked)
+                              }
+                              label="Feedback automático pós-atendimento: enviar mensagem pedindo avaliação após o atendimento"
+                            />
+                              </div>
+                            </section>
+                          </div>
+                        ) : null}
+
                         {serviceModalTab === "visual" ? (
                           <>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Identidade visual
+                                <HelpHint placement="below" label="Sobre identidade visual do serviço">
+                                  Ícone e cor aparecem na grade pública e nos cartões do catálogo.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
                             <label>
                               Ícone
                               <div className="servicesPickerRow">
@@ -6569,7 +8665,7 @@ export default function HomePage() {
                               </div>
                             </label>
                             <label>
-                              Cor
+                              Cor de destaque
                               <div className="servicesPickerRow">
                                 {SERVICE_COLORS.map((color) => (
                                   <button
@@ -6587,67 +8683,90 @@ export default function HomePage() {
                                         ? setServiceColor(color)
                                         : setEditingColor(color)
                                     }
+                                    aria-label={`Selecionar cor ${color}`}
                                   />
                                 ))}
                               </div>
                             </label>
+                              </div>
+                            </section>
+                            <section className="serviceFormSection">
+                              <h4 className="serviceFormSectionTitle formSectionTitleRow">
+                                Galeria
+                                <HelpHint placement="below" label="Sobre galeria de fotos">
+                                  Até cinco imagens para o detalhe do serviço no site.
+                                </HelpHint>
+                              </h4>
+                              <div className="serviceFormSectionBody">
+                            <label>
+                              Fotos (até 5)
+                              <Input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                disabled={
+                                  serviceUploadLoading ||
+                                  (serviceModalMode === "create"
+                                    ? serviceImages.length >= 5
+                                    : editingImages.length >= 5)
+                                }
+                                onChange={(event) =>
+                                  void handleUploadServiceImages(
+                                    event.target.files,
+                                    serviceModalMode === "create" ? "new" : "edit"
+                                  )
+                                }
+                              />
+                              {(serviceModalMode === "create" ? serviceImages : editingImages)
+                                .length > 0 ? (
+                                <div className="servicesImagesGrid">
+                                  {(serviceModalMode === "create"
+                                    ? serviceImages
+                                    : editingImages
+                                  ).map((url, index) => (
+                                    <div
+                                      key={`modal-image-${index}`}
+                                      className="servicesImagePreview"
+                                    >
+                                      <img src={url} alt={`Imagem ${index + 1}`} />
+                                      <button
+                                        type="button"
+                                        className="servicesImageRemove"
+                                        onClick={() =>
+                                          removeServiceImage(
+                                            serviceModalMode === "create" ? "new" : "edit",
+                                            index
+                                          )
+                                        }
+                                      >
+                                        ×
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </label>
+                              </div>
+                            </section>
                           </>
                         ) : null}
-
-                        {serviceModalTab === "images" ? (
-                          <label>
-                            Fotos (até 5)
-                            <Input
-                              type="file"
-                              accept="image/*"
-                              multiple
-                              disabled={
-                                serviceUploadLoading ||
-                                (serviceModalMode === "create"
-                                  ? serviceImages.length >= 5
-                                  : editingImages.length >= 5)
-                              }
-                              onChange={(event) =>
-                                void handleUploadServiceImages(
-                                  event.target.files,
-                                  serviceModalMode === "create" ? "new" : "edit"
-                                )
-                              }
-                            />
-                            {(serviceModalMode === "create" ? serviceImages : editingImages)
-                              .length > 0 ? (
-                              <div className="servicesImagesGrid">
-                                {(serviceModalMode === "create"
-                                  ? serviceImages
-                                  : editingImages
-                                ).map((url, index) => (
-                                  <div
-                                    key={`modal-image-${index}`}
-                                    className="servicesImagePreview"
-                                  >
-                                    <img src={url} alt={`Imagem ${index + 1}`} />
-                                    <button
-                                      type="button"
-                                      className="servicesImageRemove"
-                                      onClick={() =>
-                                        removeServiceImage(
-                                          serviceModalMode === "create" ? "new" : "edit",
-                                          index
-                                        )
-                                      }
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : null}
-                          </label>
-                        ) : null}
                       </div>
-                      <div className="actionsRow">
+                      <div className="structuredFormFooter">
+                        {serviceModalMode === "edit" ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => void handleDeleteEditingService()}
+                          >
+                            Excluir
+                          </Button>
+                        ) : null}
+                        <Button type="button" variant="outline" onClick={closeServiceModal}>
+                          Cancelar
+                        </Button>
                         <Button
                           type="button"
+                          variant="primary"
                           onClick={async () => {
                             const ok =
                               serviceModalMode === "create"
@@ -6657,9 +8776,6 @@ export default function HomePage() {
                           }}
                         >
                           Salvar serviço
-                        </Button>
-                        <Button type="button" variant="outline" onClick={closeServiceModal}>
-                          Cancelar
                         </Button>
                       </div>
                     </article>
@@ -6677,337 +8793,100 @@ export default function HomePage() {
                   conforme cadastro); no calendário você pode liberar uma data específica para usar
                   o horário do dia da semana em vez dessa regra.
                 </p>
-                <form className="form" onSubmit={handleSaveBusinessHours}>
-                  <div className="hoursGrid">
-                    {weekDaysSchedule.map((day) => {
-                      const row = businessHours.find((item) => item.weekday === day.id);
-                      if (!row) return null;
-
-                      return (
-                        <div key={day.id} className="hoursRow">
-                          <Checkbox
-                            className="hoursToggle"
-                            checked={row.isActive}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, { isActive: event.target.checked })
-                            }
-                            label={day.label}
-                          />
-                          <Input
-                            type="time"
-                            value={row.startTime}
-                            disabled={!row.isActive}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, { startTime: event.target.value })
-                            }
-                          />
-                          <Input
-                            type="time"
-                            value={row.endTime}
-                            disabled={!row.isActive}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, { endTime: event.target.value })
-                            }
-                          />
-                          <Checkbox
-                            checked={row.hasLunchBreak}
-                            disabled={!row.isActive}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, {
-                                hasLunchBreak: event.target.checked
-                              })
-                            }
-                            label="Almoço"
-                          />
-                          <Input
-                            type="time"
-                            value={row.lunchStartTime}
-                            disabled={!row.isActive || !row.hasLunchBreak}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, {
-                                lunchStartTime: event.target.value
-                              })
-                            }
-                          />
-                          <Input
-                            type="time"
-                            value={row.lunchEndTime}
-                            disabled={!row.isActive || !row.hasLunchBreak}
-                            onChange={(event) =>
-                              updateBusinessHour(day.id, {
-                                lunchEndTime: event.target.value
-                              })
-                            }
-                          />
-                        </div>
-                      );
-                    })}
+                <form
+                  className="form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                  }}
+                >
+                  <div className="formGroup messageSection">
+                    <div className="messageSectionHeader">
+                      <h3>Horários e turnos</h3>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="messageSectionToggle"
+                        onClick={() =>
+                          setHoursSettingsSectionOpen((prev) => ({
+                            ...prev,
+                            schedule: !prev.schedule
+                          }))
+                        }
+                      >
+                        {hoursSettingsSectionOpen.schedule ? "Recolher" : "Expandir"}
+                      </Button>
+                    </div>
+                    {hoursSettingsSectionOpen.schedule ? (
+                      <>
+                        <p className="helperText">
+                          Gerencie os períodos de vigência e os turnos por dia. Use{" "}
+                          <strong>Adicionar agenda</strong> (ou <strong>Editar</strong> na grade) para abrir
+                          o formulário — mesmo fluxo do cadastro de empresas (lista + modal).
+                        </p>
+                        <p className="helperText">
+                          Cada <strong>turno</strong> é um intervalo de atendimento. Para dois períodos no
+                          mesmo dia, use <strong>Adicionar turno</strong>. A linha sombreada na grade indica
+                          agenda <strong>vigente hoje</strong> no fuso do negócio. Reservas usam a agenda da
+                          data escolhida (desempate: personalizado → mensal → anual → indeterminada; em
+                          empate, a mais recente).
+                        </p>
+                        <p className="helperText">
+                          <strong>Pausas longas, férias ou viagem:</strong> use{" "}
+                          <strong>Adicionar bloqueio</strong> na barra da grade (ou o atalho{" "}
+                          <strong>Bloquear agenda</strong> na Visão geral). O bloqueio impede novas reservas
+                          no período; se já houver horários marcados, o sistema avisa para você reagendar
+                          manualmente.
+                        </p>
+                        {hourScheduleGaps.length > 0 ? (
+                          <div className="hourScheduleGapsAlert" role="status">
+                            <AlertTriangle
+                              className="hourScheduleGapsAlertIcon"
+                              size={20}
+                              aria-hidden
+                            />
+                            <div>
+                              <strong>Intervalos sem agenda entre vigências</strong>
+                              <p className="hourScheduleGapsAlertText">
+                                Entre duas agendas cadastradas há dias sem cobertura:{" "}
+                                {hourScheduleGaps
+                                  .map((g) => `${g.from} a ${g.to}`)
+                                  .join("; ")}
+                                . Pode ser período de férias ou um esquecimento nas datas — confira para
+                                evitar confusão nas reservas.
+                              </p>
+                            </div>
+                          </div>
+                        ) : null}
+                        <DeveloperHourSchedulesAgGrid
+                          rowData={hourSchedulesList.map((row) => ({
+                            id: row.id,
+                            validityType: row.validityType,
+                            validFrom: row.validFrom,
+                            validTo: row.validTo,
+                            isVigenteHoje: row.isVigenteHoje,
+                            createdAt: row.createdAt,
+                            updatedAt: row.updatedAt
+                          }))}
+                          onAddSchedule={openHourScheduleModalCreate}
+                          onEditRow={openHourScheduleModalEdit}
+                          onAddClosure={() => setClosureModalOpen(true)}
+                        />
+                      </>
+                    ) : null}
                   </div>
-                  <div className="hoursRulesGrid">
-                    <p className="helperText hoursRulesHint">
-                      Estes intervalos sao personalizaveis por negocio e sao aplicados na
-                      disponibilidade e na validacao de conflitos de agendamento.
+
+                  <div className="formGroup messageSection">
+                    <p className="helperText">
+                      <strong>Por serviço (aba Tempos e regras no cadastro do serviço):</strong>{" "}
+                      além de
+                      buffers e fila, configure aqui os{" "}
+                      <strong>prazos mínimos para cancelar ou reagendar</strong>,{" "}
+                      <strong>pós-atendimento, remarketing, retorno e aniversário</strong>, e a{" "}
+                      <strong>experiência do fluxo</strong> (reagendamento assistido por WhatsApp,
+                      check-in por QR, feedback automático). Novos serviços herdam os valores atuais
+                      da empresa como ponto de partida.
                     </p>
-                    <label>
-                      Tempo de preparação antes (min)
-                      <Input
-                        type="number"
-                        min={0}
-                        step={5}
-                        value={bookingBufferBeforeMinutes}
-                        onChange={(event) =>
-                          setBookingBufferBeforeMinutes(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Tempo de limpeza/descanso depois (min)
-                      <Input
-                        type="number"
-                        min={0}
-                        step={5}
-                        value={bookingBufferAfterMinutes}
-                        onChange={(event) =>
-                          setBookingBufferAfterMinutes(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Antecedencia minima para agendar (min)
-                      <Input
-                        type="number"
-                        min={0}
-                        step={5}
-                        value={bookingMinNoticeMinutes}
-                        onChange={(event) =>
-                          setBookingMinNoticeMinutes(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Janela maxima para agendar (dias)
-                      <Input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={bookingMaxDaysAhead}
-                        onChange={(event) =>
-                          setBookingMaxDaysAhead(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Limite diario de agendamentos (opcional)
-                      <Input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={bookingDailyLimit}
-                        onChange={(event) => setBookingDailyLimit(event.target.value)}
-                        placeholder="Sem limite"
-                      />
-                    </label>
-                    <label>
-                      Capacidade simultanea por horario
-                      <Input
-                        type="number"
-                        min={1}
-                        max={50}
-                        step={1}
-                        value={bookingSlotCapacity}
-                        onChange={(event) => setBookingSlotCapacity(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Lista de espera automatizada
-                      <Checkbox
-                        checked={waitlistEnabled}
-                        onChange={(event) => setWaitlistEnabled(event.target.checked)}
-                        label="Permitir fila de espera quando horarios estiverem esgotados"
-                      />
-                    </label>
-                    <label>
-                      Lembrete 24h antes
-                      <Checkbox
-                        checked={reminder24hEnabled}
-                        onChange={(event) => setReminder24hEnabled(event.target.checked)}
-                        label="Enviar aviso: seu agendamento e amanha"
-                      />
-                    </label>
-                    <label>
-                      Lembrete 2h antes
-                      <Checkbox
-                        checked={reminder2hEnabled}
-                        onChange={(event) => setReminder2hEnabled(event.target.checked)}
-                        label="Enviar lembrete proximo ao horario"
-                      />
-                    </label>
-                    <label>
-                      Lembrete 30min antes
-                      <Checkbox
-                        checked={reminder30mEnabled}
-                        onChange={(event) => setReminder30mEnabled(event.target.checked)}
-                        label="Enviar confirmacao de deslocamento"
-                      />
-                    </label>
-                    <label>
-                      Confirmacao obrigatoria de presenca
-                      <Checkbox
-                        checked={attendanceConfirmationRequired}
-                        onChange={(event) =>
-                          setAttendanceConfirmationRequired(event.target.checked)
-                        }
-                        label="Exigir confirmacao antes do atendimento"
-                      />
-                    </label>
-                    <label>
-                      Prazo para confirmar presenca (min antes)
-                      <Input
-                        type="number"
-                        min={60}
-                        max={10080}
-                        step={30}
-                        value={attendanceConfirmationDeadlineMinutes}
-                        onChange={(event) =>
-                          setAttendanceConfirmationDeadlineMinutes(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Liberacao automatica por falta de confirmacao
-                      <Checkbox
-                        checked={autoReleaseUnconfirmed}
-                        onChange={(event) => setAutoReleaseUnconfirmed(event.target.checked)}
-                        label="Liberar horario automaticamente se cliente nao confirmar"
-                      />
-                    </label>
-                    <label>
-                      Pos-atendimento: agradecimento + avaliacao
-                      <Checkbox
-                        checked={postVisitThankYouEnabled}
-                        onChange={(event) => setPostVisitThankYouEnabled(event.target.checked)}
-                        label="Enviar mensagem apos atendimento concluido"
-                      />
-                    </label>
-                    <label>
-                      Pos-atendimento: cupom proxima visita
-                      <Checkbox
-                        checked={postVisitCouponEnabled}
-                        onChange={(event) => setPostVisitCouponEnabled(event.target.checked)}
-                        label="Enviar incentivo para retorno"
-                      />
-                    </label>
-                    <label>
-                      Campanhas de remarketing
-                      <Checkbox
-                        checked={remarketingEnabled}
-                        onChange={(event) => setRemarketingEnabled(event.target.checked)}
-                        label="Enviar campanhas para clientes inativos"
-                      />
-                    </label>
-                    <label>
-                      Auto-agendamento de retorno
-                      <Checkbox
-                        checked={autoReturnEnabled}
-                        onChange={(event) => setAutoReturnEnabled(event.target.checked)}
-                        label="Oferecer retorno em 1 clique"
-                      />
-                    </label>
-                    <label>
-                      Dias para retorno automático
-                      <Input
-                        type="number"
-                        min={7}
-                        max={120}
-                        step={1}
-                        value={autoReturnDays}
-                        onChange={(event) => setAutoReturnDays(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Reagendamento em 1 clique
-                      <Checkbox
-                        checked={oneClickRescheduleEnabled}
-                        onChange={(event) => setOneClickRescheduleEnabled(event.target.checked)}
-                        label="Sugerir novos horários quando houver cancelamento"
-                      />
-                    </label>
-                    <label>
-                      Check-in por QR code
-                      <Checkbox
-                        checked={checkinQrEnabled}
-                        onChange={(event) => setCheckinQrEnabled(event.target.checked)}
-                        label="Permitir check-in automático por token/QR"
-                      />
-                    </label>
-                    <label>
-                      Feedback automático pós-atendimento
-                      <Checkbox
-                        checked={autoFeedbackEnabled}
-                        onChange={(event) => setAutoFeedbackEnabled(event.target.checked)}
-                        label="Enviar mensagem de avaliação automática"
-                      />
-                    </label>
-                    <label>
-                      Google Reviews habilitado
-                      <Checkbox
-                        checked={googleReviewsEnabled}
-                        onChange={(event) => setGoogleReviewsEnabled(event.target.checked)}
-                        label="Anexar link de avaliação do Google"
-                      />
-                    </label>
-                    <label>
-                      URL do Google Reviews
-                      <Input
-                        type="url"
-                        value={googleReviewsUrl}
-                        onChange={(event) => setGoogleReviewsUrl(event.target.value)}
-                        placeholder="https://g.page/r/..."
-                      />
-                    </label>
-                    <label>
-                      Inatividade para remarketing (dias)
-                      <Input
-                        type="number"
-                        min={7}
-                        max={365}
-                        step={1}
-                        value={remarketingInactiveDays}
-                        onChange={(event) => setRemarketingInactiveDays(event.target.value)}
-                      />
-                    </label>
-                    <label>
-                      Mensagem de aniversario
-                      <Checkbox
-                        checked={birthdayCampaignEnabled}
-                        onChange={(event) => setBirthdayCampaignEnabled(event.target.checked)}
-                        label="Enviar desconto/brinde no aniversario"
-                      />
-                    </label>
-                    <label>
-                      Limite para reagendamento (min antes do inicio)
-                      <Input
-                        type="number"
-                        min={0}
-                        step={5}
-                        value={bookingRescheduleCutoffMinutes}
-                        onChange={(event) =>
-                          setBookingRescheduleCutoffMinutes(event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      Limite para cancelamento (min antes do inicio)
-                      <Input
-                        type="number"
-                        min={0}
-                        step={5}
-                        value={bookingCancelCutoffMinutes}
-                        onChange={(event) =>
-                          setBookingCancelCutoffMinutes(event.target.value)
-                        }
-                      />
-                    </label>
                   </div>
                   <p className="helperText">
                     Essas regras impactam os slots disponíveis para WhatsApp e painel manual.
@@ -7021,9 +8900,302 @@ export default function HomePage() {
                       Salvar regras de disponibilidade
                     </Button>
                   </div>
-                  <Button className="saveButton">Salvar horário de atendimento</Button>
                   {hoursFeedback ? <p className="feedbackOk">{hoursFeedback}</p> : null}
                 </form>
+
+                {hourScheduleModalOpen ? (
+                  <div
+                    className="detailsModalBackdrop"
+                    onClick={() => closeHourScheduleModal()}
+                  >
+                    <article
+                      className="detailsModalCard structuredFormModal hourScheduleFormModal"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="structuredFormModalHeader hourScheduleModalHeader">
+                        <h3 className="integrationName" id="hourScheduleModalTitle">
+                          {hourScheduleModalMode === "create"
+                            ? "Nova agenda de horários"
+                            : "Editar agenda de horários"}
+                        </h3>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => closeHourScheduleModal()}
+                        >
+                          Fechar
+                        </Button>
+                      </div>
+                      <form
+                        className="structuredFormModalForm"
+                        onSubmit={(e) => void handleSaveBusinessHours(e)}
+                      >
+                        <div className="hourScheduleModalBody">
+                          <p className="helperText hourScheduleModalIntro">
+                            {hourScheduleModalMode === "edit" ? (
+                              <>
+                                Alterando a vigência (tipo ou datas personalizadas) recalcula o período;
+                                alterar só os turnos mantém as datas já salvas.
+                              </>
+                            ) : (
+                              <>
+                                Nova agenda: as existentes permanecem na grade. A reserva usa a
+                                configuração aplicável a cada data.
+                              </>
+                            )}
+                          </p>
+
+                          <section
+                            className="hourValiditySection hourValiditySection--modal"
+                            aria-labelledby="hourScheduleValidityHeading"
+                          >
+                            <h4 className="hourValidityTitle" id="hourScheduleValidityHeading">
+                              Vigência
+                            </h4>
+                            <div className="hourValidityOptions hourValidityOptions--modal" role="group">
+                              {(
+                                [
+                                  ["indeterminate", "Indeterminada (até a próxima alteração)"],
+                                  ["monthly", "Mensal (mês corrente no fuso do negócio)"],
+                                  ["annual", "Anual (ano corrente no fuso do negócio)"],
+                                  ["custom", "Personalizado (informe início e fim)"]
+                                ] as const
+                              ).map(([value, label]) => (
+                                <Checkbox
+                                  key={value}
+                                  className={`hourValidityModalCheck${
+                                    hourValidityType === value ? " isSelected" : ""
+                                  }`}
+                                  checked={hourValidityType === value}
+                                  onChange={(event) => {
+                                    if (event.target.checked) setHourValidityType(value);
+                                  }}
+                                  label={label}
+                                />
+                              ))}
+                            </div>
+                            {hourValidityType === "custom" ? (
+                              <div className="hourValidityCustomRange hourValidityCustomRange--modal">
+                                <label className="hourValidityDateField">
+                                  <span className="hourValidityDateLabel">Início</span>
+                                  <Input
+                                    type="date"
+                                    value={hourCustomFrom}
+                                    onChange={(event) => setHourCustomFrom(event.target.value)}
+                                  />
+                                </label>
+                                <label className="hourValidityDateField">
+                                  <span className="hourValidityDateLabel">Fim</span>
+                                  <Input
+                                    type="date"
+                                    value={hourCustomTo}
+                                    onChange={(event) => setHourCustomTo(event.target.value)}
+                                  />
+                                </label>
+                              </div>
+                            ) : null}
+                          </section>
+
+                          <section
+                            className="hourScheduleModalTurnosSection"
+                            aria-labelledby="hourScheduleTurnosHeading"
+                          >
+                            <h4 className="hourScheduleModalTurnosTitle" id="hourScheduleTurnosHeading">
+                              Horários e turnos
+                            </h4>
+                            <div className="hoursGrid hoursGrid--modal">
+                          {weekDaysSchedule.map((day) => {
+                            const row = businessHours.find((item) => item.weekday === day.id);
+                            if (!row) return null;
+
+                            return (
+                              <div key={day.id} className="hoursDayBlock">
+                                <div className="hoursDayBlockLead">
+                                  <Checkbox
+                                    className="hoursToggle hoursDayLineCheck"
+                                    checked={row.isActive}
+                                    onChange={(event) =>
+                                      updateBusinessHour(day.id, {
+                                        isActive: event.target.checked
+                                      })
+                                    }
+                                    label={day.label}
+                                  />
+                                </div>
+                                {row.isActive ? (
+                                  <div className="hoursDayBlockBody">
+                                    <div
+                                      className="hoursShiftTable"
+                                      role="table"
+                                      aria-label={`Turnos de ${day.label}`}
+                                    >
+                                      <div
+                                        className="hoursShiftRowLine hoursShiftRowLine--head"
+                                        role="row"
+                                      >
+                                        <span
+                                          className="hoursShiftTh hoursShiftTh--idx"
+                                          role="columnheader"
+                                        >
+                                          Turno
+                                        </span>
+                                        <span className="hoursShiftTh" role="columnheader">
+                                          Início
+                                        </span>
+                                        <span className="hoursShiftTh" role="columnheader">
+                                          Fim
+                                        </span>
+                                        <span
+                                          className="hoursShiftTh hoursShiftTh--empty"
+                                          role="presentation"
+                                          aria-hidden="true"
+                                        />
+                                        <span
+                                          className="hoursShiftTh hoursShiftTh--empty"
+                                          role="presentation"
+                                          aria-hidden="true"
+                                        />
+                                      </div>
+                                      {row.shifts.map((shift, shiftIndex) => (
+                                        <div
+                                          key={shift.id}
+                                          className="hoursShiftRowLine"
+                                          role="row"
+                                          aria-label={`${day.label}, turno ${shiftIndex + 1}`}
+                                        >
+                                          <span
+                                            className="hoursShiftTd hoursShiftTd--idx"
+                                            role="cell"
+                                            title={`Turno ${shiftIndex + 1}`}
+                                          >
+                                            {shiftIndex + 1}
+                                          </span>
+                                          <div className="hoursShiftTd" role="cell">
+                                            <Input
+                                              type="time"
+                                              value={shift.startTime}
+                                              aria-label={`${day.label}: início, turno ${shiftIndex + 1}`}
+                                              onChange={(event) =>
+                                                updateDayShift(day.id, shift.id, {
+                                                  startTime: event.target.value
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div className="hoursShiftTd" role="cell">
+                                            <Input
+                                              type="time"
+                                              value={shift.endTime}
+                                              aria-label={`${day.label}: fim, turno ${shiftIndex + 1}`}
+                                              onChange={(event) =>
+                                                updateDayShift(day.id, shift.id, {
+                                                  endTime: event.target.value
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div
+                                            className="hoursShiftTd hoursShiftTd--action"
+                                            role="cell"
+                                          >
+                                            {row.shifts.length > 1 ? (
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="hoursShiftRemoveBtn"
+                                                onClick={() => removeDayShift(day.id, shift.id)}
+                                              >
+                                                Remover
+                                              </Button>
+                                            ) : (
+                                              <span className="hoursShiftCellMuted" aria-hidden>
+                                                —
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div
+                                            className="hoursShiftTd hoursShiftTd--addCol"
+                                            role="cell"
+                                          >
+                                            {shiftIndex === 0 ? (
+                                              <Button
+                                                type="button"
+                                                variant="outline"
+                                                size="sm"
+                                                className="hoursAddShiftBtn"
+                                                onClick={() => addDayShift(day.id)}
+                                              >
+                                                Adicionar turno
+                                              </Button>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                            </div>
+                          </section>
+                          {hourScheduleOverlapPrompt ? (
+                            <div className="hourScheduleOverlapPanel" role="alert">
+                              <p className="hourScheduleOverlapTitle">
+                                <AlertTriangle
+                                  className="hourScheduleOverlapIcon"
+                                  size={18}
+                                  aria-hidden
+                                />
+                                Conflito com outras vigências
+                              </p>
+                              <p className="helperText hourScheduleOverlapMessage">
+                                {hourScheduleOverlapPrompt.message}
+                              </p>
+                              {hourScheduleOverlapPrompt.overlapping.length > 0 ? (
+                                <ul className="hourScheduleOverlapList">
+                                  {hourScheduleOverlapPrompt.overlapping.map((o) => (
+                                    <li key={o.id}>
+                                      <strong>{hourValidityLabel(o.validityType)}</strong> — {o.validFrom}{" "}
+                                      a {o.validTo ?? "em aberto"}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                              <div className="hourScheduleOverlapActions">
+                                <Button
+                                  type="button"
+                                  onClick={() => void submitBusinessHoursSave(true)}
+                                >
+                                  Sim, aplicar esta agenda e ajustar as outras
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  onClick={() => setHourScheduleOverlapPrompt(null)}
+                                >
+                                  Voltar e revisar
+                                </Button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="structuredFormFooter hourScheduleModalFooter">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => closeHourScheduleModal()}
+                          >
+                            Cancelar
+                          </Button>
+                          <Button type="submit">Salvar agenda</Button>
+                        </div>
+                      </form>
+                    </article>
+                  </div>
+                ) : null}
               </article>
             ) : null}
 
@@ -7141,9 +9313,15 @@ export default function HomePage() {
                 services={services.map((s) => ({ id: s.id, name: s.name }))}
               />
             ) : null}
+            <BusinessClosureEditor
+              open={closureModalOpen}
+              onOpenChange={setClosureModalOpen}
+              businessId={selectedBusinessId}
+            />
           </section>
-        </div>
+          </div>
+        </>
       ) : null}
-    </main>
+    </div>
   );
 }

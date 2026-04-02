@@ -33,7 +33,22 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!business || business.waitlist_enabled === false) {
-      return NextResponse.json({ error: "Fila de espera desativada para este negocio." }, { status: 400 });
+      return NextResponse.json({ error: "Fila de espera desativada para esta empresa." }, { status: 400 });
+    }
+
+    if (body.serviceId) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select("waitlist_enabled")
+        .eq("id", body.serviceId)
+        .eq("business_id", body.businessId)
+        .maybeSingle();
+      if (svc && svc.waitlist_enabled === false) {
+        return NextResponse.json(
+          { error: "Fila de espera desativada para este servico." },
+          { status: 400 }
+        );
+      }
     }
 
     const dateIso = startsAt.toISOString().slice(0, 10);

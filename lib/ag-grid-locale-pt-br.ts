@@ -1,0 +1,55 @@
+/**
+ * Textos da interface do AG Grid (Community) em português (Brasil).
+ * Chaves omitidas permanecem em inglês pelo grid.
+ */
+export const AG_GRID_LOCALE_PT_BR: Record<string, string> = {
+  page: 'Página',
+  more: 'Mais',
+  to: 'até',
+  of: 'de',
+  next: 'Próxima',
+  last: 'Última',
+  first: 'Primeira',
+  previous: 'Anterior',
+  loadingOoo: 'Carregando...',
+  noRowsToShow: 'Nenhum registro encontrado. Ajuste a busca ou os filtros.',
+  empty: 'Vazio',
+
+  selectAll: 'Selecionar tudo',
+  searchOoo: 'Buscar…',
+  filterOoo: 'Filtrar…',
+  equals: 'Igual a',
+  notEqual: 'Diferente de',
+  blank: 'Em branco',
+  notBlank: 'Não em branco',
+  lessThan: 'Menor que',
+  greaterThan: 'Maior que',
+  lessThanOrEqual: 'Menor ou igual',
+  greaterThanOrEqual: 'Maior ou igual',
+  inRange: 'Entre',
+  inRangeStart: 'De',
+  inRangeEnd: 'Até',
+  contains: 'Contém',
+  notContains: 'Não contém',
+  startsWith: 'Começa com',
+  endsWith: 'Termina com',
+  andCondition: 'E',
+  orCondition: 'OU',
+
+  pinColumn: 'Fixar coluna',
+  pinLeft: 'Fixar à esquerda',
+  pinRight: 'Fixar à direita',
+  noPin: 'Não fixar',
+  autosizeThisColumn: 'Ajustar esta coluna',
+  autosizeAllColumns: 'Ajustar todas as colunas',
+  resetColumns: 'Redefinir colunas',
+
+  copy: 'Copiar',
+  copyWithHeaders: 'Copiar com cabeçalhos',
+  paste: 'Colar',
+  export: 'Exportar',
+  csvExport: 'Exportar CSV',
+  excelExport: 'Exportar Excel',
+
+  pageSizeSelectorLabel: 'Itens por página:',
+};

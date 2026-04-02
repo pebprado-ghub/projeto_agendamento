@@ -192,7 +192,7 @@ function sanitizeAndValidate(body: CreateBusinessInput): {
   error: string;
 } {
   const name = body.name?.trim() || "";
-  if (!name) return { ok: false, error: "Nome do negocio e obrigatorio." };
+  if (!name) return { ok: false, error: "Nome da empresa e obrigatorio." };
 
   const cnpjDigits = normalizeDigits(body.cnpj);
   if (cnpjDigits && cnpjDigits.length !== 14) {
@@ -383,15 +383,14 @@ export async function GET() {
     const supabase = getSupabaseAdmin();
     const { data, error } = await supabase
       .from("businesses")
-      .select(
-        "id, name, slug, timezone, calendar_mode, whatsapp_number, cnpj, legal_name, trade_name, cnae_code, cnae_description, address_line, address_number, address_complement, neighborhood, city, state, postal_code, contact_name, contact_phone, contact_email, booking_buffer_before_minutes, booking_buffer_after_minutes, booking_min_notice_minutes, booking_max_days_ahead, booking_daily_limit, booking_reschedule_cutoff_minutes, booking_cancel_cutoff_minutes, booking_slot_capacity, waitlist_enabled, reminder_24h_enabled, reminder_2h_enabled, reminder_30m_enabled, attendance_confirmation_required, attendance_confirmation_deadline_minutes, auto_release_unconfirmed, post_visit_thank_you_enabled, post_visit_coupon_enabled, remarketing_enabled, remarketing_inactive_days, birthday_campaign_enabled, auto_return_enabled, auto_return_days, one_click_reschedule_enabled, checkin_qr_enabled, auto_feedback_enabled, google_reviews_enabled, google_reviews_url, subscription_plan_code, subscription_status, monthly_appointment_limit, professional_limit, automations_enabled, multi_unit_enabled, billing_period_start, billing_period_end, created_at"
-      )
-      .order("created_at", { ascending: false })
-      .limit(20);
+      // Usa `*` para evitar quebra quando o banco local estiver em migração parcial.
+      .select("*")
+      .order("name", { ascending: true })
+      .limit(10_000);
 
     if (error) {
       return NextResponse.json(
-        { error: "Falha ao listar negocios." },
+        { error: `Falha ao listar empresas: ${error.message}` },
         { status: 500 }
       );
     }
@@ -417,7 +416,7 @@ export async function POST(request: NextRequest) {
     const supabase = getSupabaseAdmin();
     const sanitized = parsed.data;
     const baseSlug = slugify(body.name);
-    const slug = `${baseSlug || "negocio"}-${Date.now().toString().slice(-6)}`;
+    const slug = `${baseSlug || "empresa"}-${Date.now().toString().slice(-6)}`;
 
     const { data: business, error: businessError } = await supabase
       .from("businesses")
@@ -487,7 +486,7 @@ export async function POST(request: NextRequest) {
 
     if (businessError || !business) {
       return NextResponse.json(
-        { error: "Nao foi possivel criar o negocio." },
+        { error: "Nao foi possivel criar a empresa." },
         { status: 500 }
       );
     }
@@ -655,7 +654,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Negocio criado, mas houve falha ao salvar templates de mensagem."
+            "Empresa criada, mas houve falha ao salvar templates de mensagem."
         },
         { status: 500 }
       );
@@ -667,7 +666,7 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json(
-      { message: "Negocio criado com sucesso.", business },
+      { message: "Empresa criada com sucesso.", business },
       { status: 201 }
     );
   } catch (error) {

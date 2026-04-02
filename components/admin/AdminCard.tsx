@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { cn } from "@/lib/cn";
 import {
   Card,
   CardContent,
@@ -11,13 +12,20 @@ type AdminCardProps = {
   title: string;
   description?: string;
   className?: string;
+  headerClassName?: string;
   children: ReactNode;
 };
 
-export function AdminCard({ title, description, className = "", children }: AdminCardProps) {
+export function AdminCard({
+  title,
+  description,
+  className = "",
+  headerClassName,
+  children
+}: AdminCardProps) {
   return (
     <Card className={className}>
-      <CardHeader className="adminCardHeader">
+      <CardHeader className={cn("adminCardHeader", headerClassName)}>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : null}
       </CardHeader>

@@ -104,6 +104,31 @@ create table if not exists services (
   display_order int,
   duration_minutes int not null check (duration_minutes > 0),
   price_cents int,
+  booking_buffer_before_minutes int not null default 0,
+  booking_buffer_after_minutes int not null default 0,
+  booking_min_notice_minutes int not null default 0,
+  booking_max_days_ahead int not null default 60,
+  booking_daily_limit int,
+  booking_slot_capacity int not null default 1,
+  waitlist_enabled boolean not null default true,
+  reminder_24h_enabled boolean not null default true,
+  reminder_2h_enabled boolean not null default true,
+  reminder_30m_enabled boolean not null default true,
+  attendance_confirmation_required boolean not null default true,
+  attendance_confirmation_deadline_minutes int not null default 1440,
+  auto_release_unconfirmed boolean not null default true,
+  booking_reschedule_cutoff_minutes int not null default 0,
+  booking_cancel_cutoff_minutes int not null default 0,
+  post_visit_thank_you_enabled boolean not null default true,
+  post_visit_coupon_enabled boolean not null default true,
+  remarketing_enabled boolean not null default true,
+  remarketing_inactive_days int not null default 30,
+  birthday_campaign_enabled boolean not null default true,
+  auto_return_enabled boolean not null default true,
+  auto_return_days int not null default 30,
+  one_click_reschedule_enabled boolean not null default true,
+  checkin_qr_enabled boolean not null default true,
+  auto_feedback_enabled boolean not null default false,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -115,16 +140,60 @@ alter table services add column if not exists icon text;
 alter table services add column if not exists color text;
 alter table services add column if not exists image_urls text[] not null default '{}';
 alter table services add column if not exists display_order int;
+alter table services add column if not exists booking_buffer_before_minutes int not null default 0;
+alter table services add column if not exists booking_buffer_after_minutes int not null default 0;
+alter table services add column if not exists booking_min_notice_minutes int not null default 0;
+alter table services add column if not exists booking_max_days_ahead int not null default 60;
+alter table services add column if not exists booking_daily_limit int;
+alter table services add column if not exists booking_slot_capacity int not null default 1;
+alter table services add column if not exists waitlist_enabled boolean not null default true;
+alter table services add column if not exists reminder_24h_enabled boolean not null default true;
+alter table services add column if not exists reminder_2h_enabled boolean not null default true;
+alter table services add column if not exists reminder_30m_enabled boolean not null default true;
+alter table services add column if not exists attendance_confirmation_required boolean not null default true;
+alter table services add column if not exists attendance_confirmation_deadline_minutes int not null default 1440;
+alter table services add column if not exists auto_release_unconfirmed boolean not null default true;
+alter table services add column if not exists booking_reschedule_cutoff_minutes int not null default 0;
+alter table services add column if not exists booking_cancel_cutoff_minutes int not null default 0;
+alter table services add column if not exists post_visit_thank_you_enabled boolean not null default true;
+alter table services add column if not exists post_visit_coupon_enabled boolean not null default true;
+alter table services add column if not exists remarketing_enabled boolean not null default true;
+alter table services add column if not exists remarketing_inactive_days int not null default 30;
+alter table services add column if not exists birthday_campaign_enabled boolean not null default true;
+alter table services add column if not exists auto_return_enabled boolean not null default true;
+alter table services add column if not exists auto_return_days int not null default 30;
+alter table services add column if not exists one_click_reschedule_enabled boolean not null default true;
+alter table services add column if not exists checkin_qr_enabled boolean not null default true;
+alter table services add column if not exists auto_feedback_enabled boolean not null default false;
+
+create table if not exists business_hour_schedules (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references businesses(id) on delete cascade,
+  validity_type text not null,
+  valid_from date not null,
+  valid_to date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (validity_type in ('indeterminate', 'monthly', 'annual', 'custom')),
+  check (valid_to is null or valid_to >= valid_from)
+);
+
+create index if not exists idx_business_hour_schedules_business
+  on business_hour_schedules (business_id);
+create index if not exists idx_business_hour_schedules_range
+  on business_hour_schedules (business_id, valid_from, valid_to);
 
 create table if not exists business_hours (
   id uuid primary key default gen_random_uuid(),
   business_id uuid not null references businesses(id) on delete cascade,
+  schedule_id uuid not null references business_hour_schedules(id) on delete cascade,
   weekday int not null check (weekday between 0 and 7),
   start_time time not null,
   end_time time not null,
   lunch_start_time time,
   lunch_end_time time,
   is_active boolean not null default true,
+  sort_order int not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (start_time < end_time),
@@ -136,6 +205,7 @@ create table if not exists business_hours (
 
 alter table business_hours add column if not exists lunch_start_time time;
 alter table business_hours add column if not exists lunch_end_time time;
+alter table business_hours add column if not exists sort_order int not null default 0;
 
 create table if not exists calendar_connections (
   id uuid primary key default gen_random_uuid(),
@@ -217,6 +287,7 @@ create table if not exists customers (
   notes text,
   source text not null default 'manual',
   marketing_opt_in boolean not null default false,
+  marketing_opt_in_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   check (source in ('manual', 'whatsapp', 'import', 'other')),
@@ -231,6 +302,7 @@ alter table customers add column if not exists tags text[] not null default '{}'
 alter table customers add column if not exists last_contact_at timestamptz;
 alter table customers add column if not exists is_blocked boolean not null default false;
 alter table customers add column if not exists block_reason text;
+alter table customers add column if not exists marketing_opt_in_at timestamptz;
 alter table businesses add column if not exists auto_return_enabled boolean not null default true;
 alter table businesses add column if not exists auto_return_days int not null default 30;
 alter table businesses add column if not exists one_click_reschedule_enabled boolean not null default true;
@@ -354,6 +426,10 @@ drop trigger if exists trg_appointments_updated_at on appointments;
 create trigger trg_appointments_updated_at before update on appointments
 for each row execute function set_updated_at();
 
+drop trigger if exists trg_business_closure_periods_updated_at on business_closure_periods;
+create trigger trg_business_closure_periods_updated_at before update on business_closure_periods
+for each row execute function set_updated_at();
+
 drop trigger if exists trg_customers_updated_at on customers;
 create trigger trg_customers_updated_at before update on customers
 for each row execute function set_updated_at();
@@ -369,6 +445,23 @@ create table if not exists business_holiday_working_days (
   created_at timestamptz not null default now (),
   primary key (business_id, date_iso)
 );
+
+-- Indisponibilidade (ferias, viagem, emergencia): nao aceita novos agendamentos no intervalo.
+create table if not exists business_closure_periods (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references businesses(id) on delete cascade,
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  kind text not null default 'other'
+    check (kind in ('vacation', 'emergency', 'travel', 'other')),
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (ends_at > starts_at)
+);
+
+create index if not exists idx_business_closure_periods_business_range
+  on business_closure_periods (business_id, starts_at, ends_at);
 
 create table if not exists appointment_waitlist (
   id uuid primary key default gen_random_uuid(),
@@ -625,3 +718,86 @@ for each row execute function set_updated_at();
 drop trigger if exists trg_subscription_change_requests_updated_at on subscription_change_requests;
 create trigger trg_subscription_change_requests_updated_at before update on subscription_change_requests
 for each row execute function set_updated_at();
+
+create table if not exists developer_contact_logs (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references businesses (id) on delete cascade,
+  note text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists developer_contact_logs_business_id_created_at_idx
+  on developer_contact_logs (business_id, created_at desc);
+
+create table if not exists developer_communication_threads (
+  id uuid primary key default gen_random_uuid(),
+  business_id uuid not null references businesses (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint developer_communication_threads_business_unique unique (business_id)
+);
+
+create index if not exists developer_communication_threads_updated_at_idx
+  on developer_communication_threads (updated_at desc);
+
+create table if not exists developer_communication_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references developer_communication_threads (id) on delete cascade,
+  channel text not null check (channel in ('whatsapp', 'email', 'internal')),
+  direction text not null check (direction in ('inbound', 'outbound', 'system')),
+  subject text,
+  body text not null default '',
+  metadata jsonb not null default '{}'::jsonb,
+  external_provider_id text,
+  external_thread_key text,
+  sender_label text,
+  source_contact_log_id uuid null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists developer_communication_messages_thread_created_idx
+  on developer_communication_messages (thread_id, created_at desc);
+
+create unique index if not exists developer_communication_messages_source_log_uidx
+  on developer_communication_messages (source_contact_log_id)
+  where source_contact_log_id is not null;
+
+create or replace view developer_communication_thread_summaries as
+select
+  t.id as thread_id,
+  t.business_id,
+  t.updated_at as thread_updated_at,
+  b.name as business_name,
+  b.slug as business_slug,
+  lm.body as last_message_body,
+  lm.channel as last_message_channel,
+  lm.direction as last_message_direction,
+  lm.created_at as last_message_at
+from developer_communication_threads t
+inner join businesses b on b.id = t.business_id
+left join lateral (
+  select m.body, m.channel, m.direction, m.created_at
+  from developer_communication_messages m
+  where m.thread_id = t.id
+  order by m.created_at desc
+  limit 1
+) lm on true;
+
+create or replace function developer_communication_touch_thread_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  update developer_communication_threads
+  set updated_at = now()
+  where id = new.thread_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_developer_communication_messages_touch_thread
+  on developer_communication_messages;
+
+create trigger trg_developer_communication_messages_touch_thread
+after insert or update on developer_communication_messages
+for each row execute function developer_communication_touch_thread_updated_at();

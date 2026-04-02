@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  buffersFromBusiness,
+  buffersFromServiceOrBusiness,
+  type BufferPair
+} from "@/lib/bookingBuffers";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { appointmentOverlapsBusinessClosure } from "@/lib/businessClosureOverlap";
 import { notifyNextWaitlistForWindow } from "@/lib/waitlist";
 
 type Params = {
@@ -139,7 +145,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const { data: current, error: currentError } = await supabase
       .from("appointments")
       .select(
-        "id, customer_name, customer_phone, starts_at, ends_at, status, business_id"
+        "id, customer_name, customer_phone, starts_at, ends_at, status, business_id, service_id"
       )
       .eq("id", appointmentId)
       .single();
@@ -161,19 +167,31 @@ export async function PATCH(request: NextRequest, { params }: Params) {
 
     const startsAtDate = new Date(current.starts_at);
     const diffMinutes = Math.floor((startsAtDate.getTime() - Date.now()) / 60_000);
-    const rescheduleCutoff = Math.max(
+    let rescheduleCutoff = Math.max(
       0,
       Number(businessRules?.booking_reschedule_cutoff_minutes || 0)
     );
-    const cancelCutoff = Math.max(
-      0,
-      Number(businessRules?.booking_cancel_cutoff_minutes || 0)
-    );
-    const bufferBefore = Math.max(
-      0,
-      Number(businessRules?.booking_buffer_before_minutes || 0)
-    );
-    const bufferAfter = Math.max(0, Number(businessRules?.booking_buffer_after_minutes || 0));
+    let cancelCutoff = Math.max(0, Number(businessRules?.booking_cancel_cutoff_minutes || 0));
+    const businessBuf = buffersFromBusiness(businessRules || {});
+    const apptServiceId = current.service_id as string | null;
+    let shiftPair: BufferPair = businessBuf;
+    if (apptServiceId) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select(
+          "booking_buffer_before_minutes, booking_buffer_after_minutes, booking_reschedule_cutoff_minutes, booking_cancel_cutoff_minutes"
+        )
+        .eq("id", apptServiceId)
+        .eq("business_id", current.business_id)
+        .maybeSingle();
+      if (svc) {
+        shiftPair = buffersFromServiceOrBusiness(svc, businessBuf);
+        rescheduleCutoff = Math.max(0, Number(svc.booking_reschedule_cutoff_minutes || 0));
+        cancelCutoff = Math.max(0, Number(svc.booking_cancel_cutoff_minutes || 0));
+      }
+    }
+    const bufferBefore = shiftPair.before;
+    const bufferAfter = shiftPair.after;
 
     const patch: Record<string, string> = {};
     let shiftMinutes = 0;
@@ -231,7 +249,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       const shiftedEndWithBuffer = applyMinutes(shiftedEnd, bufferAfter);
       const { data: overlappingAppointments, error: overlapError } = await supabase
         .from("appointments")
-        .select("id, starts_at, ends_at")
+        .select("id, starts_at, ends_at, service_id")
         .eq("business_id", current.business_id)
         .in("status", ["pending", "confirmed"])
         .neq("id", appointmentId)
@@ -246,12 +264,46 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         );
       }
 
+      const shiftOverlapIds = [
+        ...new Set(
+          (overlappingAppointments || [])
+            .map((row) => row.service_id as string | null)
+            .filter((id): id is string => Boolean(id))
+        )
+      ];
+      const shiftLoadIds = [
+        ...new Set([...shiftOverlapIds, apptServiceId].filter(Boolean))
+      ] as string[];
+      let shiftBufferByServiceId = new Map<string, BufferPair>();
+      if (shiftLoadIds.length > 0) {
+        const { data: svcRows } = await supabase
+          .from("services")
+          .select("id, booking_buffer_before_minutes, booking_buffer_after_minutes")
+          .eq("business_id", current.business_id)
+          .in("id", shiftLoadIds);
+        shiftBufferByServiceId = new Map(
+          (svcRows || []).map((s) => [
+            s.id as string,
+            buffersFromServiceOrBusiness(
+              {
+                booking_buffer_before_minutes: Number(s.booking_buffer_before_minutes || 0),
+                booking_buffer_after_minutes: Number(s.booking_buffer_after_minutes || 0)
+              },
+              businessBuf
+            )
+          ])
+        );
+      }
+
+      const pairForShift = (serviceId: string | null): BufferPair =>
+        serviceId && shiftBufferByServiceId.has(serviceId)
+          ? shiftBufferByServiceId.get(serviceId)!
+          : businessBuf;
+
       const hasConflict = (overlappingAppointments || []).some((item) => {
-        const existingStart = applyMinutes(
-          new Date(item.starts_at),
-          -bufferBefore
-        ).getTime();
-        const existingEnd = applyMinutes(new Date(item.ends_at), bufferAfter).getTime();
+        const p = pairForShift(item.service_id as string | null);
+        const existingStart = applyMinutes(new Date(item.starts_at), -p.before).getTime();
+        const existingEnd = applyMinutes(new Date(item.ends_at), p.after).getTime();
         return (
           shiftedStartWithBuffer.getTime() < existingEnd &&
           shiftedEndWithBuffer.getTime() > existingStart
@@ -264,9 +316,10 @@ export async function PATCH(request: NextRequest, { params }: Params) {
           Math.round((shiftedEnd.getTime() - shiftedStart.getTime()) / 60_000)
         );
         const nextStartAt = (overlappingAppointments || []).reduce((latest, item) => {
+          const p = pairForShift(item.service_id as string | null);
           const blockedUntil = applyMinutes(
             new Date(item.ends_at),
-            bufferAfter + bufferBefore
+            p.after + shiftPair.before
           ).getTime();
           return Math.max(latest, blockedUntil);
         }, shiftedStart.getTime());
@@ -280,6 +333,25 @@ export async function PATCH(request: NextRequest, { params }: Params) {
               suggestedStartAt: toIso(new Date(nextStartAt)),
               suggestedEndAt: toIso(nextEndAt)
             }
+          },
+          { status: 409 }
+        );
+      }
+
+      const closureCheck = await appointmentOverlapsBusinessClosure(
+        supabase,
+        current.business_id,
+        shiftedStart,
+        shiftedEnd
+      );
+      if (!closureCheck.ok) {
+        return NextResponse.json({ error: closureCheck.error }, { status: 500 });
+      }
+      if (closureCheck.blocked) {
+        return NextResponse.json(
+          {
+            error:
+              "Novo horario cai em periodo bloqueado (ferias, viagem ou indisponibilidade cadastrada). Escolha outra data."
           },
           { status: 409 }
         );
@@ -305,6 +377,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     if (body.action === "cancel" || body.action === "shift") {
       await notifyNextWaitlistForWindow({
         businessId: current.business_id,
+        serviceId: apptServiceId,
         windowStartIso: vacatedWindow.start,
         windowEndIso: vacatedWindow.end
       });
@@ -316,7 +389,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       )
     );
     const suggestedSlots =
-      body.action === "cancel" && body.action !== "shift"
+      body.action === "cancel"
         ? await suggestRebookingSlots({
             supabase,
             businessId: current.business_id,

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  buffersFromBusiness,
+  buffersFromServiceOrBusiness,
+  type BufferPair
+} from "@/lib/bookingBuffers";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ensureCustomerForAppointment } from "@/lib/ensureCustomerForAppointment";
+import { appointmentOverlapsBusinessClosure } from "@/lib/businessClosureOverlap";
 
 type CreateAppointmentInput = {
   businessId: string;
@@ -16,6 +22,10 @@ type CreateAppointmentInput = {
   notes?: string;
   /** Se false, não cria/vincula cliente automático (padrão: true quando customerId omitido). */
   autoCreateCustomer?: boolean;
+  /** Consentimento explícito para marketing (checkbox no fluxo do titular). Só grava quando true. */
+  marketingOptIn?: boolean;
+  /** Origem do cadastro ao criar cliente (ex.: `other` reserva web; padrão `whatsapp`). */
+  customerRecordSource?: string | null;
 };
 
 function applyMinutes(date: Date, minutes: number) {
@@ -114,7 +124,9 @@ export async function POST(request: NextRequest) {
       const ensured = await ensureCustomerForAppointment({
         businessId: body.businessId,
         customerPhone: body.customerPhone,
-        customerName: body.customerName
+        customerName: body.customerName,
+        marketingOptIn: body.marketingOptIn,
+        customerRecordSource: body.customerRecordSource
       });
       if (ensured) {
         resolvedCustomerId = ensured;
@@ -148,13 +160,29 @@ export async function POST(request: NextRequest) {
       .eq("id", body.businessId)
       .single();
 
-    const bufferBefore = Math.max(
-      0,
-      Number(businessRules?.booking_buffer_before_minutes || 0)
-    );
-    const bufferAfter = Math.max(0, Number(businessRules?.booking_buffer_after_minutes || 0));
-    const slotCapacity = Math.max(1, Number(businessRules?.booking_slot_capacity || 1));
-    const waitlistEnabled = businessRules?.waitlist_enabled !== false;
+    const businessBuf = buffersFromBusiness(businessRules || {});
+    let newBookingBuffers: BufferPair = businessBuf;
+    let slotCapacity = Math.max(1, Number(businessRules?.booking_slot_capacity || 1));
+    let waitlistEnabled = businessRules?.waitlist_enabled !== false;
+
+    if (body.serviceId) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select(
+          "booking_buffer_before_minutes, booking_buffer_after_minutes, booking_slot_capacity, waitlist_enabled"
+        )
+        .eq("id", body.serviceId)
+        .eq("business_id", body.businessId)
+        .maybeSingle();
+      if (svc) {
+        newBookingBuffers = buffersFromServiceOrBusiness(svc, businessBuf);
+        slotCapacity = Math.max(1, Number(svc.booking_slot_capacity || 1));
+        waitlistEnabled = svc.waitlist_enabled !== false;
+      }
+    }
+
+    const bufferBefore = newBookingBuffers.before;
+    const bufferAfter = newBookingBuffers.after;
     const subscriptionStatus = String(businessRules?.subscription_status || "active");
     const monthlyLimitRaw = businessRules?.monthly_appointment_limit;
     const monthlyLimit =
@@ -205,7 +233,7 @@ export async function POST(request: NextRequest) {
 
     const { data: overlappingAppointments, error: overlapError } = await supabase
       .from("appointments")
-      .select("id, starts_at, ends_at")
+      .select("id, starts_at, ends_at, service_id")
       .eq("business_id", body.businessId)
       .in("status", ["pending", "confirmed"])
       .lt("starts_at", endsAtWithBuffer.toISOString())
@@ -219,12 +247,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const overlapServiceIds = [
+      ...new Set(
+        (overlappingAppointments || [])
+          .map((row) => row.service_id as string | null)
+          .filter((id): id is string => Boolean(id))
+      )
+    ];
+    const idsToLoad = [...new Set([...overlapServiceIds, body.serviceId].filter(Boolean))] as string[];
+    let bufferByServiceId = new Map<string, BufferPair>();
+    if (idsToLoad.length > 0) {
+      const { data: svcRows } = await supabase
+        .from("services")
+        .select("id, booking_buffer_before_minutes, booking_buffer_after_minutes")
+        .eq("business_id", body.businessId)
+        .in("id", idsToLoad);
+      bufferByServiceId = new Map(
+        (svcRows || []).map((s) => [
+          s.id as string,
+          buffersFromServiceOrBusiness(
+            {
+              booking_buffer_before_minutes: Number(s.booking_buffer_before_minutes || 0),
+              booking_buffer_after_minutes: Number(s.booking_buffer_after_minutes || 0)
+            },
+            businessBuf
+          )
+        ])
+      );
+    }
+
+    const pairFor = (serviceId: string | null): BufferPair =>
+      serviceId && bufferByServiceId.has(serviceId)
+        ? bufferByServiceId.get(serviceId)!
+        : businessBuf;
+
     const overlappingCount = (overlappingAppointments || []).filter((item) => {
-      const existingStart = applyMinutes(
-        new Date(item.starts_at),
-        -bufferBefore
-      ).getTime();
-      const existingEnd = applyMinutes(new Date(item.ends_at), bufferAfter).getTime();
+      const p = pairFor(item.service_id as string | null);
+      const existingStart = applyMinutes(new Date(item.starts_at), -p.before).getTime();
+      const existingEnd = applyMinutes(new Date(item.ends_at), p.after).getTime();
       return startsAtWithBuffer.getTime() < existingEnd && endsAtWithBuffer.getTime() > existingStart;
     }).length;
     const hasConflict = overlappingCount >= slotCapacity;
@@ -235,9 +295,10 @@ export async function POST(request: NextRequest) {
         Math.round((endsAt.getTime() - startsAt.getTime()) / 60_000)
       );
       const nextStartAt = (overlappingAppointments || []).reduce((latest, item) => {
+        const p = pairFor(item.service_id as string | null);
         const blockedUntil = applyMinutes(
           new Date(item.ends_at),
-          bufferAfter + bufferBefore
+          p.after + newBookingBuffers.before
         ).getTime();
         return Math.max(latest, blockedUntil);
       }, startsAt.getTime());
@@ -254,6 +315,25 @@ export async function POST(request: NextRequest) {
             overlappingCount,
             waitlistEligible: waitlistEnabled
           }
+        },
+        { status: 409 }
+      );
+    }
+
+    const closureCheck = await appointmentOverlapsBusinessClosure(
+      supabase,
+      body.businessId,
+      startsAt,
+      endsAt
+    );
+    if (!closureCheck.ok) {
+      return NextResponse.json({ error: closureCheck.error }, { status: 500 });
+    }
+    if (closureCheck.blocked) {
+      return NextResponse.json(
+        {
+          error:
+            "Periodo bloqueado para novos agendamentos (ferias, viagem ou indisponibilidade cadastrada)."
         },
         { status: 409 }
       );

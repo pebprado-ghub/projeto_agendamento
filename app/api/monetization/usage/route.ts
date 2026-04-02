@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
       .eq("id", businessId)
       .maybeSingle();
     if (bErr || !business) {
-      return NextResponse.json({ error: "Negocio nao encontrado." }, { status: 404 });
+      return NextResponse.json({ error: "Empresa nao encontrada." }, { status: 404 });
     }
     const { count, error: cErr } = await supabase
       .from("appointments")

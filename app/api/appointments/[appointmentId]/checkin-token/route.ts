@@ -19,9 +19,31 @@ export async function POST(request: NextRequest, { params }: Params) {
       .select("checkin_qr_enabled")
       .eq("id", businessId)
       .maybeSingle();
-    if (!business || business.checkin_qr_enabled === false) {
+    if (!business) {
+      return NextResponse.json({ error: "Empresa nao encontrada." }, { status: 404 });
+    }
+    const { data: apptRow } = await supabase
+      .from("appointments")
+      .select("service_id")
+      .eq("id", appointmentId)
+      .eq("business_id", businessId)
+      .maybeSingle();
+    let checkinOk = business.checkin_qr_enabled !== false;
+    const sid = apptRow?.service_id as string | null;
+    if (sid) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select("checkin_qr_enabled")
+        .eq("id", sid)
+        .eq("business_id", businessId)
+        .maybeSingle();
+      if (svc) {
+        checkinOk = svc.checkin_qr_enabled !== false;
+      }
+    }
+    if (!checkinOk) {
       return NextResponse.json(
-        { error: "Check-in por QR esta desabilitado para este negocio." },
+        { error: "Check-in por QR esta desabilitado para este servico." },
         { status: 403 }
       );
     }

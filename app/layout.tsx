@@ -17,8 +17,8 @@ const lato = Lato({
 });
 
 export const metadata: Metadata = {
-  title: "Agendamento Multi-Negocio",
-  description: "Painel para configurar automacao de agendamento com WhatsApp."
+  title: "Agendamento Multi-Negócio",
+  description: "Painel para configurar automação de agendamento com WhatsApp."
 };
 
 type RootLayoutProps = {

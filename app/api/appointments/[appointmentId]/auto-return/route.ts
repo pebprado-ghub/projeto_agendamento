@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { appointmentOverlapsBusinessClosure } from "@/lib/businessClosureOverlap";
 
 type Params = { params: { appointmentId: string } };
 type Body = { businessId: string; daysAhead?: number };
@@ -20,11 +21,8 @@ export async function POST(request: NextRequest, { params }: Params) {
       .select("auto_return_enabled, auto_return_days")
       .eq("id", body.businessId)
       .maybeSingle();
-    if (!business || business.auto_return_enabled === false) {
-      return NextResponse.json(
-        { error: "Auto-agendamento de retorno desabilitado para este negocio." },
-        { status: 403 }
-      );
+    if (!business) {
+      return NextResponse.json({ error: "Empresa nao encontrada." }, { status: 404 });
     }
     const { data: source } = await supabase
       .from("appointments")
@@ -37,15 +35,54 @@ export async function POST(request: NextRequest, { params }: Params) {
     if (!source) {
       return NextResponse.json({ error: "Agendamento nao encontrado." }, { status: 404 });
     }
+    let autoReturnOk = business.auto_return_enabled !== false;
+    let defaultReturnDays = Number(business.auto_return_days ?? 30);
+    const sid = source.service_id as string | null;
+    if (sid) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select("auto_return_enabled, auto_return_days")
+        .eq("id", sid)
+        .eq("business_id", body.businessId)
+        .maybeSingle();
+      if (svc) {
+        autoReturnOk = svc.auto_return_enabled !== false;
+        defaultReturnDays = Number(svc.auto_return_days ?? 30);
+      }
+    }
+    if (!autoReturnOk) {
+      return NextResponse.json(
+        { error: "Auto-agendamento de retorno desabilitado para este servico." },
+        { status: 403 }
+      );
+    }
     const days = Math.max(
       7,
-      Math.min(120, Math.floor(Number(body.daysAhead ?? business.auto_return_days ?? 30)))
+      Math.min(120, Math.floor(Number(body.daysAhead ?? defaultReturnDays ?? 30)))
     );
     const start = new Date(source.starts_at);
     const end = new Date(source.ends_at);
     const durationMs = Math.max(15 * 60_000, end.getTime() - start.getTime());
     const nextStart = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
     const nextEnd = new Date(nextStart.getTime() + durationMs);
+    const closureCheck = await appointmentOverlapsBusinessClosure(
+      supabase,
+      body.businessId,
+      nextStart,
+      nextEnd
+    );
+    if (!closureCheck.ok) {
+      return NextResponse.json({ error: closureCheck.error }, { status: 500 });
+    }
+    if (closureCheck.blocked) {
+      return NextResponse.json(
+        {
+          error:
+            "A data sugerida para o retorno esta em periodo bloqueado. Ajuste manualmente ou remova o bloqueio antes de tentar de novo."
+        },
+        { status: 409 }
+      );
+    }
     const { data, error } = await supabase
       .from("appointments")
       .insert({

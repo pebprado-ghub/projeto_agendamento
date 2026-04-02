@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       if (!ap) {
         return NextResponse.json(
-          { error: "Agendamento nao encontrado para este negocio." },
+          { error: "Agendamento nao encontrado para esta empresa." },
           { status: 404 }
         );
       }

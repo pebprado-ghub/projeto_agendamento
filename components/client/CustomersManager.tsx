@@ -18,6 +18,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { normalizePhoneDigits } from "@/lib/phone";
 import { formatMaskedFromDigits, maskCep } from "@/lib/masksBr";
 import { lookupViaCep } from "@/lib/viacep";
+import { OwnerCustomersAgGrid } from "@/components/admin/OwnerCustomersAgGrid";
+import { HelpHint } from "@/components/ui/help-hint";
+import { Tabs } from "@/components/ui/tabs";
+import type {
+  CustomerInactiveDaysPreset,
+  OwnerCustomersAgGridRow,
+  OwnerCustomersCrmQuickFilters
+} from "@/components/admin/OwnerCustomersAgGrid";
 
 export type CustomerRow = {
   id: string;
@@ -46,6 +54,8 @@ export type CustomerRow = {
   block_reason?: string | null;
   source: string;
   marketing_opt_in: boolean;
+  /** Preenchido quando o titular manifesta consentimento em fluxo próprio (ex.: agendamento público). */
+  marketing_opt_in_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -223,12 +233,15 @@ export function CustomersManager({
   const privacyPolicyUrl = resolvePrivacyPolicyUrl();
 
   const [list, setList] = useState<CustomerRow[]>([]);
-  const [q, setQ] = useState("");
-  const [qDebounced, setQDebounced] = useState("");
   const [loading, setLoading] = useState(false);
   const [listError, setListError] = useState("");
   const [insights, setInsights] = useState<CustomerInsights | null>(null);
-  const [inactiveDaysFilter, setInactiveDaysFilter] = useState("60");
+  const [inactiveDaysPreset, setInactiveDaysPreset] = useState<CustomerInactiveDaysPreset>(60);
+  const [crmQuickFilters, setCrmQuickFilters] = useState<OwnerCustomersCrmQuickFilters>({
+    inactive: false,
+    birthdays: false,
+    vip: false
+  });
 
   const [selectedId, setSelectedId] = useState<string | "new" | null>(null);
   const [detail, setDetail] = useState<CustomerRow | null>(null);
@@ -244,11 +257,6 @@ export function CustomersManager({
     return m;
   }, [services]);
 
-  useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 400);
-    return () => clearTimeout(t);
-  }, [q]);
-
   const loadList = useCallback(async () => {
     if (!businessId) return;
     setLoading(true);
@@ -256,9 +264,6 @@ export function CustomersManager({
     try {
       const url = new URL("/api/customers", window.location.origin);
       url.searchParams.set("businessId", businessId);
-      if (qDebounced.trim().length >= 2) {
-        url.searchParams.set("q", qDebounced.trim());
-      }
       const res = await fetch(url.toString());
       const json = (await res.json()) as { data?: CustomerRow[]; error?: string };
       if (!res.ok) throw new Error(json.error || "Erro ao listar.");
@@ -269,7 +274,7 @@ export function CustomersManager({
     } finally {
       setLoading(false);
     }
-  }, [businessId, qDebounced]);
+  }, [businessId]);
 
   const loadInsights = useCallback(async () => {
     if (!businessId) return;
@@ -277,7 +282,7 @@ export function CustomersManager({
       const res = await fetch(
         `/api/customers/insights?businessId=${encodeURIComponent(
           businessId
-        )}&inactiveDays=${encodeURIComponent(inactiveDaysFilter)}`
+        )}&inactiveDays=${encodeURIComponent(String(inactiveDaysPreset))}`
       );
       const json = (await res.json()) as { data?: CustomerInsights; error?: string };
       if (!res.ok) throw new Error(json.error || "Erro ao carregar insights.");
@@ -285,7 +290,7 @@ export function CustomersManager({
     } catch {
       setInsights(null);
     }
-  }, [businessId, inactiveDaysFilter]);
+  }, [businessId, inactiveDaysPreset]);
 
   useEffect(() => {
     void loadList();
@@ -294,6 +299,130 @@ export function CustomersManager({
   useEffect(() => {
     void loadInsights();
   }, [loadInsights]);
+
+  const crmPreviewSlot = useMemo(() => {
+    if (!insights) return null;
+    const birthdays = insights.birthdaysThisMonth.slice(0, 5);
+    const inactive = insights.inactiveCustomers.slice(0, 5);
+    if (birthdays.length === 0 && inactive.length === 0) return null;
+    return (
+      <div className="customersCrmPreviewLists">
+        {birthdays.length > 0 ? (
+          <div className="customersCrmPreviewCol">
+            <span className="customersCrmPreviewTitle">Próximos aniversariantes</span>
+            <ul className="customersCrmPreviewUl">
+              {birthdays.map((item) => (
+                <li key={`birthday-${item.customerId}`}>
+                  {item.fullName}{" "}
+                  <small>
+                    ({item.birthDate})
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {inactive.length > 0 ? (
+          <div className="customersCrmPreviewCol">
+            <span className="customersCrmPreviewTitle">
+              Inativos em destaque ({insights.inactiveDays}+ dias)
+            </span>
+            <ul className="customersCrmPreviewUl">
+              {inactive.map((item) => (
+                <li key={`inactive-${item.customerId}`}>
+                  {item.fullName}
+                  <small>
+                    {" "}
+                    · {item.daysSinceLastVisit ?? "—"} dias · LTV {formatBrl(item.lifetimeValueCents)}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  }, [insights]);
+
+  const customerGridRows = useMemo((): OwnerCustomersAgGridRow[] => {
+    return list.map((c) => ({
+      id: c.id,
+      full_name: c.full_name,
+      phone_display: formatPhoneBrDigits(c.phone_normalized),
+      email: c.email,
+      whatsapp_profile_name: c.whatsapp_profile_name ?? null,
+      is_vip: Boolean(c.is_vip),
+      is_blocked: Boolean(c.is_blocked),
+      tags_display: c.tags && c.tags.length > 0 ? c.tags.join(", ") : "",
+      source_label: SOURCE_LABEL[c.source] || c.source,
+      created_display: formatDateTimePt(c.created_at),
+      document_id: c.document_id,
+      city: c.city,
+      marketing_opt_in: Boolean(c.marketing_opt_in)
+    }));
+  }, [list]);
+
+  const customerGridRowsFiltered = useMemo((): OwnerCustomersAgGridRow[] => {
+    const { inactive, birthdays, vip } = crmQuickFilters;
+    if (!inactive && !birthdays && !vip) return customerGridRows;
+
+    const inactiveIds =
+      inactive && insights
+        ? new Set(insights.inactiveCustomers.map((c) => c.customerId))
+        : null;
+    const birthdayIds =
+      birthdays && insights
+        ? new Set(insights.birthdaysThisMonth.map((b) => b.customerId))
+        : null;
+
+    return customerGridRows.filter((row) => {
+      const parts: boolean[] = [];
+      if (inactive) parts.push(inactiveIds?.has(row.id) ?? false);
+      if (birthdays) parts.push(birthdayIds?.has(row.id) ?? false);
+      if (vip) parts.push(row.is_vip);
+      return parts.some(Boolean);
+    });
+  }, [crmQuickFilters, customerGridRows, insights]);
+
+  const deleteCustomerById = useCallback(
+    async (customerId: string): Promise<boolean> => {
+      if (!businessId) return false;
+      setFeedbackErr("");
+      try {
+        const res = await fetch(
+          `/api/customers/${customerId}?businessId=${encodeURIComponent(businessId)}`,
+          { method: "DELETE" }
+        );
+        if (!res.ok) {
+          const j = (await res.json()) as { error?: string };
+          throw new Error(j.error || "Erro ao excluir.");
+        }
+        setSelectedId((prev) => (prev === customerId ? null : prev));
+        setDetail((d) => (d?.id === customerId ? null : d));
+        void loadList();
+        void loadInsights();
+        return true;
+      } catch (err) {
+        setFeedbackErr((err as Error).message);
+        return false;
+      }
+    },
+    [businessId, loadList, loadInsights]
+  );
+
+  function handleCustomerRowActivate(row: OwnerCustomersAgGridRow) {
+    if (selectedId === row.id) {
+      closeDetail();
+    } else {
+      setSelectedId(row.id);
+      setTab("dados");
+    }
+  }
+
+  function handleCustomerEditRow(row: OwnerCustomersAgGridRow) {
+    setSelectedId(row.id);
+    setTab("dados");
+  }
 
   async function loadDetail(id: string) {
     if (!businessId) return;
@@ -395,8 +524,7 @@ export function CustomersManager({
       is_vip: false,
       is_blocked: false,
       block_reason: "",
-      source: "manual",
-      marketing_opt_in: false
+      source: "manual"
     }),
     []
   );
@@ -505,8 +633,7 @@ export function CustomersManager({
       isVip: Boolean(form.is_vip),
       isBlocked: Boolean(form.is_blocked),
       blockReason: form.block_reason || null,
-      source: form.source || "manual",
-      marketingOptIn: Boolean(form.marketing_opt_in)
+      source: form.source || "manual"
     };
 
     try {
@@ -521,6 +648,7 @@ export function CustomersManager({
         setFeedback("Cliente cadastrado. Agendamentos com o mesmo telefone foram vinculados quando possível.");
         setSelectedId(json.data?.id || null);
         void loadList();
+        void loadInsights();
         return;
       }
       if (!selectedId) return;
@@ -534,6 +662,7 @@ export function CustomersManager({
       setDetail(json.data || null);
       setFeedback("Dados atualizados.");
       void loadList();
+      void loadInsights();
       void loadActivity(selectedId);
     } catch (err) {
       setFeedbackErr((err as Error).message);
@@ -544,22 +673,10 @@ export function CustomersManager({
     if (!businessId || !selectedId || selectedId === "new") return;
     if (!window.confirm("Excluir este cliente e histórico de pagamentos vinculado?")) return;
     setFeedback("");
-    setFeedbackErr("");
-    try {
-      const res = await fetch(
-        `/api/customers/${selectedId}?businessId=${encodeURIComponent(businessId)}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) {
-        const j = (await res.json()) as { error?: string };
-        throw new Error(j.error || "Erro ao excluir.");
-      }
-      setSelectedId(null);
-      setDetail(null);
-      void loadList();
+    const ok = await deleteCustomerById(selectedId);
+    if (ok) {
       setFeedback("Cliente excluído.");
-    } catch (err) {
-      setFeedbackErr((err as Error).message);
+      closeDetail();
     }
   }
 
@@ -809,120 +926,25 @@ export function CustomersManager({
     >
       <div className="customersLayout">
         <div className="customersListPanel">
-          <div className="customersToolbar">
-            <Input
-              className="uiInput"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar nome, e-mail ou telefone..."
-              aria-label="Buscar clientes"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void loadList()}
-            >
-              Atualizar
-            </Button>
-            <Button type="button" size="sm" onClick={() => setSelectedId("new")}>
-              Novo cliente
-            </Button>
-          </div>
-          <div className="customersToolbar">
-            <Input
-              className="uiInput"
-              type="number"
-              min={30}
-              step={1}
-              value={inactiveDaysFilter}
-              onChange={(e) => setInactiveDaysFilter(e.target.value)}
-              placeholder="Inativos em dias"
-            />
-            <Button type="button" variant="outline" size="sm" onClick={() => void loadInsights()}>
-              Atualizar listas CRM
-            </Button>
-          </div>
-          {insights ? (
-            <div className="list">
-              <div>
-                <strong>Aniversariantes do mês:</strong> {insights.birthdaysThisMonth.length}
-              </div>
-              <div>
-                <strong>Clientes inativos ({insights.inactiveDays}+ dias):</strong>{" "}
-                {insights.inactiveCustomers.length}
-              </div>
-              <div>
-                <strong>VIP:</strong> {insights.totals.vip}
-              </div>
-              {insights.birthdaysThisMonth.slice(0, 5).map((item) => (
-                <div key={`birthday-${item.customerId}`}>
-                  <span>Aniversário:</span>{" "}
-                  <small>
-                    {item.fullName} ({item.birthDate})
-                  </small>
-                </div>
-              ))}
-              {insights.inactiveCustomers.slice(0, 5).map((item) => (
-                <div key={`inactive-${item.customerId}`}>
-                  <span>Inativo:</span>{" "}
-                  <small>
-                    {item.fullName} · {item.daysSinceLastVisit ?? "sem histórico"} dias · LTV{" "}
-                    {formatBrl(item.lifetimeValueCents)}
-                  </small>
-                </div>
-              ))}
-            </div>
-          ) : null}
           {listError ? <p className="feedbackError">{listError}</p> : null}
-          <div className="customersList">
-            {loading ? (
-              <p className="helperText">Carregando...</p>
-            ) : list.length === 0 ? (
-              <p className="helperText">Nenhum cliente encontrado.</p>
-            ) : (
-              list.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  className={`customersListItem ${
-                    selectedId === c.id ? "isActive" : ""
-                  }`}
-                  title={
-                    selectedId === c.id
-                      ? "Clique novamente para fechar os detalhes"
-                      : "Abrir ficha do cliente"
-                  }
-                  onClick={() => {
-                    if (selectedId === c.id) {
-                      closeDetail();
-                    } else {
-                      setSelectedId(c.id);
-                      setTab("dados");
-                    }
-                  }}
-                >
-                  <strong>{c.full_name}</strong>
-                  {c.is_vip ? <small>VIP</small> : null}
-                  {c.tags && c.tags.length > 0 ? <small>Tags: {c.tags.join(", ")}</small> : null}
-                  {c.whatsapp_profile_name &&
-                  c.whatsapp_profile_name.trim() !== c.full_name.trim() ? (
-                    <span className="customersListWhatsappName" title="Nome no perfil WhatsApp">
-                      Perfil WA: {c.whatsapp_profile_name}
-                    </span>
-                  ) : null}
-                  <span>{formatPhoneBrDigits(c.phone_normalized)}</span>
-                  <small>{c.email || "—"}</small>
-                </button>
-              ))
-            )}
-          </div>
+          <OwnerCustomersAgGrid
+            rowData={customerGridRowsFiltered}
+            selectedCustomerId={typeof selectedId === "string" && selectedId !== "new" ? selectedId : null}
+            onRowActivate={handleCustomerRowActivate}
+            onEditRow={handleCustomerEditRow}
+            onAddCustomer={() => setSelectedId("new")}
+            crmInsightsReady={insights != null}
+            crmQuickFilters={crmQuickFilters}
+            onCrmQuickFiltersChange={setCrmQuickFilters}
+            inactiveDaysPreset={inactiveDaysPreset}
+            onInactiveDaysPresetChange={setInactiveDaysPreset}
+            crmPreviewSlot={crmPreviewSlot}
+          />
         </div>
-
       </div>
       {selectedId ? (
         <div
-          className="customersModalOverlay"
+          className="detailsModalBackdrop customersDetailBackdrop"
           role="presentation"
           onClick={(event) => {
             if (event.target === event.currentTarget) {
@@ -930,17 +952,50 @@ export function CustomersManager({
             }
           }}
         >
-          <div className="customersDetailPanel customersModal" role="dialog" aria-modal="true">
+          <article
+            className="detailsModalCard structuredFormModal structuredFormModal--tall structuredFormModal--customers"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={
+              selectedId === "new" ? "customerModalTitleNew" : "customerModalTitleEdit"
+            }
+          >
+            <div className="structuredFormModalHeader">
+              <div>
+                <h3
+                  className="integrationName"
+                  id={selectedId === "new" ? "customerModalTitleNew" : "customerModalTitleEdit"}
+                >
+                  {selectedId === "new"
+                    ? "Novo cliente"
+                    : detail?.full_name || "Ficha do cliente"}
+                </h3>
+                {selectedId === "new" ? (
+                  <p className="structuredFormModalSubtitle">
+                    Preencha os dados do cadastro. O telefone é a chave única por empresa.
+                  </p>
+                ) : detail ? (
+                  <p className="structuredFormModalSubtitle">
+                    Origem: {SOURCE_LABEL[detail.source] || detail.source} · Cadastro:{" "}
+                    {formatDateTimePt(detail.created_at)}
+                  </p>
+                ) : (
+                  <p className="structuredFormModalSubtitle">
+                    {detailLoading ? "Carregando ficha…" : "\u00a0"}
+                  </p>
+                )}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={closeDetail}>
+                Fechar
+              </Button>
+            </div>
+
             {selectedId === "new" ? (
-              <form className="form" onSubmit={handleSubmit}>
-                <div className="customersDetailHead">
-                  <h3 className="customersDetailTitle">Novo cliente</h3>
-                  <Button type="button" variant="outline" size="sm" onClick={closeDetail}>
-                    Fechar
-                  </Button>
-                </div>
-                <div className="customersModalBody">
+              <form className="structuredFormModalForm" onSubmit={handleSubmit}>
+                <div className="structuredFormScroll form">
                   <CustomerFormFields
+                    formResetKey="new"
                     form={form}
                     setForm={setForm}
                     privacyPolicyUrl={privacyPolicyUrl}
@@ -948,77 +1003,64 @@ export function CustomersManager({
                     cepFeedback={cepFeedback}
                     onPostalCodeChange={handleCustomerPostalCodeChange}
                   />
+                  {feedbackErr ? <p className="feedbackError">{feedbackErr}</p> : null}
+                  {feedback ? <p className="feedbackOk">{feedback}</p> : null}
                 </div>
-                <div className="actionsRow">
-                  <Button type="submit">Salvar cadastro</Button>
+                <div className="structuredFormFooter">
                   <Button type="button" variant="outline" onClick={closeDetail}>
                     Cancelar
                   </Button>
+                  <Button type="submit">Salvar cadastro</Button>
                 </div>
-                {feedbackErr ? <p className="feedbackError">{feedbackErr}</p> : null}
-                {feedback ? <p className="feedbackOk">{feedback}</p> : null}
               </form>
+            ) : detailLoading || !detail ? (
+              <div className="structuredFormScroll">
+                {detailLoading ? (
+                  <p className="helperText">Carregando ficha...</p>
+                ) : (
+                  <p className="feedbackError">
+                    {feedbackErr || "Não foi possível carregar os detalhes deste cliente."}
+                  </p>
+                )}
+              </div>
             ) : (
               <>
-                <div className="customersDetailToolbar">
-                  <div className="customersTabs">
+                <div className="structuredFormTabsTrack">
+                  <div className="structuredFormTabs" role="tablist" aria-label="Seções da ficha do cliente">
                     <button
                       type="button"
-                      className={`customersTab ${tab === "dados" ? "isActive" : ""}`}
+                      role="tab"
+                      aria-selected={tab === "dados"}
+                      className={tab === "dados" ? "isActive" : ""}
                       onClick={() => setTab("dados")}
                     >
                       Dados
                     </button>
                     <button
                       type="button"
-                      className={`customersTab ${tab === "historico" ? "isActive" : ""}`}
+                      role="tab"
+                      aria-selected={tab === "historico"}
+                      className={tab === "historico" ? "isActive" : ""}
                       onClick={() => setTab("historico")}
                     >
                       Histórico de serviços
                     </button>
                     <button
                       type="button"
-                      className={`customersTab ${tab === "pagamentos" ? "isActive" : ""}`}
+                      role="tab"
+                      aria-selected={tab === "pagamentos"}
+                      className={tab === "pagamentos" ? "isActive" : ""}
                       onClick={() => setTab("pagamentos")}
                     >
                       Pagamentos
                     </button>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="customersCloseBtn"
-                    onClick={closeDetail}
-                  >
-                    Fechar
-                  </Button>
                 </div>
-
-                <div className="customersModalBody">
-                  {detailLoading ? <p className="helperText">Carregando ficha...</p> : null}
-                  {!detailLoading && !detail ? (
-                    <p className="feedbackError">
-                      {feedbackErr || "Não foi possível carregar os detalhes deste cliente."}
-                    </p>
-                  ) : null}
-
-                  {tab === "dados" && detail ? (
-                    <form className="form" onSubmit={handleSubmit}>
-                      <div className="customersDetailHead">
-                        <h3 className="customersDetailTitle">{detail.full_name}</h3>
-                        <div className="actionsRow">
-                          <Button type="submit">Salvar alterações</Button>
-                          <Button type="button" variant="outline" onClick={() => void handleDelete()}>
-                            Excluir
-                          </Button>
-                        </div>
-                      </div>
-                      <p className="helperText">
-                        Origem: {SOURCE_LABEL[detail.source] || detail.source} · Cadastro:{" "}
-                        {formatDateTimePt(detail.created_at)}
-                      </p>
+                {tab === "dados" ? (
+                  <form className="structuredFormModalForm" onSubmit={handleSubmit}>
+                    <div className="structuredFormScroll form">
                       <CustomerFormFields
+                        formResetKey={detail.id}
                         form={form}
                         setForm={setForm}
                         privacyPolicyUrl={privacyPolicyUrl}
@@ -1028,11 +1070,18 @@ export function CustomersManager({
                       />
                       {feedbackErr ? <p className="feedbackError">{feedbackErr}</p> : null}
                       {feedback ? <p className="feedbackOk">{feedback}</p> : null}
-                    </form>
-                  ) : null}
+                    </div>
+                    <div className="structuredFormFooter">
+                      <Button type="button" variant="outline" onClick={() => void handleDelete()}>
+                        Excluir
+                      </Button>
+                      <Button type="submit">Salvar alterações</Button>
+                    </div>
+                  </form>
+                ) : null}
 
-                  {tab === "historico" ? (
-                    <div className="customersTimeline">
+                {tab === "historico" ? (
+                  <div className="structuredFormScroll customersTimeline">
                       {activity ? (
                         <>
                           <p className="helperText">
@@ -1082,8 +1131,8 @@ export function CustomersManager({
                     </div>
                   ) : null}
 
-                  {tab === "pagamentos" ? (
-                    <div className="customersPayments">
+                {tab === "pagamentos" ? (
+                  <div className="structuredFormScroll customersPayments">
                       {activity ? (
                         <>
                           <form className="form customersPayForm" onSubmit={handleAddPayment}>
@@ -1336,19 +1385,21 @@ export function CustomersManager({
                       ) : (
                         <p className="helperText">Carregando...</p>
                       )}
-                    </div>
-                  ) : null}
-                </div>
+                  </div>
+                ) : null}
               </>
             )}
-          </div>
+          </article>
         </div>
       ) : null}
     </AdminCard>
   );
 }
 
+type CustomerFormDataTab = "contato" | "perfil" | "endereco";
+
 function CustomerFormFields({
+  formResetKey,
   form,
   setForm,
   privacyPolicyUrl,
@@ -1356,6 +1407,7 @@ function CustomerFormFields({
   cepFeedback,
   onPostalCodeChange
 }: {
+  formResetKey: string;
   form: Partial<CustomerRow> & { phoneInput?: string };
   setForm: Dispatch<SetStateAction<Partial<CustomerRow> & { phoneInput?: string }>>;
   privacyPolicyUrl?: string | null;
@@ -1363,275 +1415,356 @@ function CustomerFormFields({
   cepFeedback: string;
   onPostalCodeChange: (rawValue: string) => void;
 }) {
+  const [dataTab, setDataTab] = useState<CustomerFormDataTab>("contato");
+
+  useEffect(() => {
+    setDataTab("contato");
+  }, [formResetKey]);
+
+  const marketingOptIn = Boolean(form.marketing_opt_in);
+  const marketingAt = form.marketing_opt_in_at;
+
   return (
     <>
-      <div className="businessFormGrid">
-        <label className="full">
-          Nome no cadastro *
-          <Input
-            className="uiInput"
-            value={form.full_name || ""}
-            onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))}
-            required
-          />
-          <span className="customersFieldHint">
-            Nome que você usa no CRM (pode diferir do WhatsApp).
-          </span>
-        </label>
-        <label className="full">
-          Nome no perfil do WhatsApp
-          <Input
-            className="uiInput customersInputReadonly"
-            readOnly
-            tabIndex={-1}
-            value={form.whatsapp_profile_name || ""}
-            placeholder={
-              isNewCustomer
-                ? "Preenchido automaticamente quando houver agendamento pelo WhatsApp"
-                : "Ainda não recebido"
-            }
-            aria-readonly="true"
-          />
-          <span className="customersFieldHint">
-            Enviado pela API do WhatsApp (perfil público). Somente leitura.
-          </span>
-        </label>
-        <label>
-          WhatsApp / telefone *
-          <Input
-            className="uiInput"
-            value={form.phoneInput ?? ""}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, phoneInput: e.target.value }))
-            }
-            placeholder="(11) 99999-9999"
-            required
-          />
-        </label>
-        <label>
-          E-mail
-          <Input
-            className="uiInput"
-            type="email"
-            value={form.email || ""}
-            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-          />
-        </label>
-        <label>
-          CPF (opcional)
-          <Input
-            className="uiInput"
-            value={form.document_id || ""}
-            onChange={(e) => setForm((f) => ({ ...f, document_id: e.target.value }))}
-          />
-        </label>
-        <label>
-          Data de nascimento
-          <Input
-            className="uiInput"
-            type="date"
-            value={form.birth_date?.slice(0, 10) || ""}
-            onChange={(e) => setForm((f) => ({ ...f, birth_date: e.target.value || null }))}
-          />
-        </label>
-        <label>
-          Gênero
-          <Input
-            className="uiInput"
-            value={form.gender || ""}
-            onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
-            placeholder="Opcional"
-          />
-        </label>
-        <label className="full">
-          Observações internas
-          <Textarea
-            className="uiTextarea"
-            value={form.notes || ""}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-            rows={3}
-          />
-        </label>
-        <label className="full">
-          Preferências de atendimento
-          <Textarea
-            className="uiTextarea"
-            value={form.preferences || ""}
-            onChange={(e) => setForm((f) => ({ ...f, preferences: e.target.value }))}
-            rows={2}
-            placeholder='Ex.: "Prefere café sem açúcar"'
-          />
-        </label>
-        <label className="full">
-          Restrições / alertas
-          <Textarea
-            className="uiTextarea"
-            value={form.restrictions || ""}
-            onChange={(e) => setForm((f) => ({ ...f, restrictions: e.target.value }))}
-            rows={2}
-            placeholder='Ex.: "Alérgico a produto X"'
-          />
-        </label>
-        <label className="full">
-          Tags (separadas por vírgula)
-          <Input
-            className="uiInput"
-            value={(form.tags || []).join(", ")}
-            onChange={(e) =>
-              setForm((f) => ({
-                ...f,
-                tags: e.target.value
-                  .split(",")
-                  .map((item) => item.trim())
-                  .filter(Boolean)
-              }))
-            }
-            placeholder="VIP, Novo, Inativo, Inadimplente"
-          />
-        </label>
-        <Checkbox
-          className="full"
-          label="Atendimento VIP"
-          checked={Boolean(form.is_vip)}
-          onChange={(e) => setForm((f) => ({ ...f, is_vip: e.target.checked }))}
+      <div className="customersFormDataTabsWrap">
+        <Tabs
+          className="tabsRowOverflow customersFormDataTabs"
+          variant="segmented"
+          aria-label="Seções do cadastro do cliente"
+          value={dataTab}
+          onChange={(v) => {
+            if (v === "contato" || v === "perfil" || v === "endereco") setDataTab(v);
+          }}
+          items={[
+            { value: "contato", label: "Identificação" },
+            { value: "perfil", label: "Perfil operacional" },
+            { value: "endereco", label: "Endereço" }
+          ]}
         />
-        <Checkbox
-          className="full"
-          label="Cliente bloqueado para novos agendamentos"
-          checked={Boolean(form.is_blocked)}
-          onChange={(e) => setForm((f) => ({ ...f, is_blocked: e.target.checked }))}
-        />
-        <label className="full">
-          Motivo do bloqueio
-          <Input
-            className="uiInput"
-            value={form.block_reason || ""}
-            onChange={(e) => setForm((f) => ({ ...f, block_reason: e.target.value }))}
-            placeholder="Ex.: recorrência de não comparecimento sem aviso"
-          />
-        </label>
       </div>
-      <h4 className="customersFormSection">Endereço</h4>
-      <div className="businessFormGrid">
-        <label className="full">
-          CEP
-          <Input
-            className="uiInput"
-            value={form.postal_code || ""}
-            onChange={(e) => onPostalCodeChange(e.target.value)}
-            placeholder="00000-000"
-            inputMode="numeric"
-            autoComplete="postal-code"
-          />
-        </label>
-        {cepFeedback ? (
-          <p
-            className={`full ${
-              cepFeedback.includes("preenchido automaticamente") ? "feedbackOk" : "feedbackError"
-            }`}
-          >
-            {cepFeedback}
-          </p>
-        ) : null}
-        <label className="full">
-          Logradouro
-          <Input
-            className="uiInput"
-            value={form.address_line || ""}
-            onChange={(e) => setForm((f) => ({ ...f, address_line: e.target.value }))}
-            placeholder="Rua, avenida, etc."
-          />
-        </label>
-        <label>
-          Número
-          <Input
-            className="uiInput"
-            value={form.address_number || ""}
-            onChange={(e) => setForm((f) => ({ ...f, address_number: e.target.value }))}
-          />
-        </label>
-        <label>
-          Complemento
-          <Input
-            className="uiInput"
-            value={form.address_complement || ""}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, address_complement: e.target.value }))
-            }
-          />
-        </label>
-        <label>
-          Bairro
-          <Input
-            className="uiInput"
-            value={form.neighborhood || ""}
-            onChange={(e) => setForm((f) => ({ ...f, neighborhood: e.target.value }))}
-          />
-        </label>
-        <label>
-          Cidade
-          <Input
-            className="uiInput"
-            value={form.city || ""}
-            onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
-          />
-        </label>
-        <label>
-          UF
-          <Input
-            className="uiInput"
-            value={form.state || ""}
-            onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
-            maxLength={2}
-          />
-        </label>
-      </div>
-      <div className="customersFormMeta">
-        <label>
-          Origem do cadastro
-          <Select
-            value={form.source || "manual"}
-            onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}
-          >
-            <option value="manual">Manual</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="import">Importação</option>
-            <option value="campaign">Campanha</option>
-            <option value="other">Outro</option>
-          </Select>
-        </label>
-      </div>
-      <div className="customersLgpdBlock">
-        <h4 className="customersFormSection">Privacidade e comunicações (LGPD)</h4>
-        <p className="customersLgpdHelp">
-          Consentimento opcional para o envio de mensagens promocionais e informativas de
-          marketing por canais como e-mail ou WhatsApp, conforme a Lei nº 13.709/2018 (LGPD).
-          O titular pode retirar este consentimento a qualquer momento.
-        </p>
-        {privacyPolicyUrl ? (
-          <p className="customersLgpdLinkRow">
-            <a
-              href={privacyPolicyUrl}
-              className="customersLgpdLink"
-              {...(/^https?:\/\//i.test(privacyPolicyUrl)
-                ? { target: "_blank", rel: "noopener noreferrer" }
-                : {})}
-            >
-              Política de privacidade
-            </a>
-            {/^https?:\/\//i.test(privacyPolicyUrl) ? (
-              <span className="customersLgpdLinkHint"> · abre em nova aba</span>
+
+      {dataTab === "contato" ? (
+        <section className="structuredFormSection">
+          <h4 className="structuredFormSectionTitle formSectionTitleRow">
+            Identificação e contato
+            <HelpHint placement="below" label="Sobre identificação e contato">
+              Dados usados no CRM, no agendamento e nas mensagens. O telefone identifica o cliente na
+              empresa.
+            </HelpHint>
+          </h4>
+          <div className="structuredFormSectionBody businessFormGrid">
+            <label className="full">
+              <span className="formLabelWithHintRow">
+                Nome no cadastro *
+                <HelpHint placement="below" label="Dica: nome no cadastro">
+                  Nome que você usa no CRM (pode diferir do WhatsApp).
+                </HelpHint>
+              </span>
+              <Input
+                className="uiInput"
+                value={form.full_name || ""}
+                onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))}
+                required
+              />
+            </label>
+            <label className="full">
+              <span className="formLabelWithHintRow">
+                Nome no perfil do WhatsApp
+                <HelpHint placement="below" label="Dica: nome no WhatsApp">
+                  Enviado pela API do WhatsApp (perfil público). Somente leitura.
+                </HelpHint>
+              </span>
+              <Input
+                className="uiInput customersInputReadonly"
+                readOnly
+                tabIndex={-1}
+                value={form.whatsapp_profile_name || ""}
+                placeholder={
+                  isNewCustomer
+                    ? "Preenchido automaticamente quando houver agendamento pelo WhatsApp"
+                    : "Ainda não recebido"
+                }
+                aria-readonly="true"
+              />
+            </label>
+            <label>
+              WhatsApp / telefone *
+              <Input
+                className="uiInput"
+                value={form.phoneInput ?? ""}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, phoneInput: e.target.value }))
+                }
+                placeholder="(11) 99999-9999"
+                required
+              />
+            </label>
+            <label>
+              E-mail
+              <Input
+                className="uiInput"
+                type="email"
+                value={form.email || ""}
+                onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+              />
+            </label>
+            <label>
+              CPF (opcional)
+              <Input
+                className="uiInput"
+                value={form.document_id || ""}
+                onChange={(e) => setForm((f) => ({ ...f, document_id: e.target.value }))}
+              />
+            </label>
+            <label>
+              Data de nascimento
+              <Input
+                className="uiInput"
+                type="date"
+                value={form.birth_date?.slice(0, 10) || ""}
+                onChange={(e) => setForm((f) => ({ ...f, birth_date: e.target.value || null }))}
+              />
+            </label>
+            <label>
+              Gênero
+              <Input
+                className="uiInput"
+                value={form.gender || ""}
+                onChange={(e) => setForm((f) => ({ ...f, gender: e.target.value }))}
+                placeholder="Opcional"
+              />
+            </label>
+          </div>
+
+          <div className="customersMarketingConsentReadonly structuredFormSectionBody">
+            <h4 className="structuredFormSectionTitle customersMarketingConsentTitle formSectionTitleRow">
+              Comunicações de marketing (LGPD)
+              <HelpHint placement="below" label="Sobre consentimento LGPD" variant="wide">
+                O consentimento para mensagens promocionais deve ser dado ou retirado pelo próprio
+                cliente (titular dos dados) nos canais voltados a ele — por exemplo na página pública{" "}
+                <code className="customersCodeHint">/agendar?businessId=…</code>, no corpo JSON do
+                agendamento (<code className="customersCodeHint">marketingOptIn</code>) ou em{" "}
+                <code className="customersCodeHint">POST /api/customers/marketing-consent</code>{" "}
+                (telefone + negócio). Este painel apenas exibe o que foi registrado; não substitui a
+                manifestação do titular.
+              </HelpHint>
+            </h4>
+            {privacyPolicyUrl ? (
+              <p className="customersLgpdLinkRow">
+                <a
+                  href={privacyPolicyUrl}
+                  className="customersLgpdLink"
+                  {...(/^https?:\/\//i.test(privacyPolicyUrl)
+                    ? { target: "_blank", rel: "noopener noreferrer" }
+                    : {})}
+                >
+                  Política de privacidade
+                </a>
+                {/^https?:\/\//i.test(privacyPolicyUrl) ? (
+                  <span className="customersLgpdLinkHint"> · abre em nova aba</span>
+                ) : null}
+              </p>
             ) : null}
-          </p>
-        ) : null}
-        <Checkbox
-          label="Autorizo o recebimento de comunicações de marketing"
-          checked={Boolean(form.marketing_opt_in)}
-          onChange={(e) =>
-            setForm((f) => ({ ...f, marketing_opt_in: e.target.checked }))
-          }
-        />
-      </div>
+            <p className="customersMarketingConsentStatus" role="status">
+              {marketingOptIn ? (
+                <>
+                  <strong>Autorizado</strong> para receber comunicações de marketing.
+                  {marketingAt ? (
+                    <> Registro: {formatDateTimePt(marketingAt)}.</>
+                  ) : (
+                    <> Data do consentimento não consta no histórico (cadastro anterior ou importação).</>
+                  )}
+                </>
+              ) : (
+                <>
+                  <strong>Não autorizado</strong> neste cadastro. Novos consentimentos devem ser
+                  captados na experiência do cliente, não alterados aqui.
+                </>
+              )}
+            </p>
+          </div>
+        </section>
+      ) : null}
+
+      {dataTab === "perfil" ? (
+        <section className="structuredFormSection">
+          <h4 className="structuredFormSectionTitle formSectionTitleRow">
+            Perfil operacional
+            <HelpHint placement="below" label="Sobre perfil operacional">
+              Notas internas, sinais para a equipe e origem do cadastro.
+            </HelpHint>
+          </h4>
+          <div className="structuredFormSectionBody businessFormGrid">
+            <label className="full">
+              Observações internas
+              <Textarea
+                className="uiTextarea"
+                value={form.notes || ""}
+                onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                rows={3}
+              />
+            </label>
+            <label className="full">
+              Preferências de atendimento
+              <Textarea
+                className="uiTextarea"
+                value={form.preferences || ""}
+                onChange={(e) => setForm((f) => ({ ...f, preferences: e.target.value }))}
+                rows={2}
+                placeholder='Ex.: "Prefere café sem açúcar"'
+              />
+            </label>
+            <label className="full">
+              Restrições / alertas
+              <Textarea
+                className="uiTextarea"
+                value={form.restrictions || ""}
+                onChange={(e) => setForm((f) => ({ ...f, restrictions: e.target.value }))}
+                rows={2}
+                placeholder='Ex.: "Alérgico a produto X"'
+              />
+            </label>
+            <label className="full">
+              Tags (separadas por vírgula)
+              <Input
+                className="uiInput"
+                value={(form.tags || []).join(", ")}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    tags: e.target.value
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean)
+                  }))
+                }
+                placeholder="VIP, Novo, Inativo, Inadimplente"
+              />
+            </label>
+            <Checkbox
+              className="full"
+              label="Atendimento VIP"
+              checked={Boolean(form.is_vip)}
+              onChange={(e) => setForm((f) => ({ ...f, is_vip: e.target.checked }))}
+            />
+            <Checkbox
+              className="full"
+              label="Cliente bloqueado para novos agendamentos"
+              checked={Boolean(form.is_blocked)}
+              onChange={(e) => setForm((f) => ({ ...f, is_blocked: e.target.checked }))}
+            />
+            <label className="full">
+              Motivo do bloqueio
+              <Input
+                className="uiInput"
+                value={form.block_reason || ""}
+                onChange={(e) => setForm((f) => ({ ...f, block_reason: e.target.value }))}
+                placeholder="Ex.: recorrência de não comparecimento sem aviso"
+              />
+            </label>
+            <label>
+              Origem do cadastro
+              <Select
+                value={form.source || "manual"}
+                onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}
+              >
+                <option value="manual">Manual</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="import">Importação</option>
+                <option value="campaign">Campanha</option>
+                <option value="other">Outro</option>
+              </Select>
+            </label>
+          </div>
+        </section>
+      ) : null}
+
+      {dataTab === "endereco" ? (
+        <section className="structuredFormSection">
+          <h4 className="structuredFormSectionTitle formSectionTitleRow">
+            Endereço
+            <HelpHint placement="below" label="Sobre CEP e endereço">
+              CEP com preenchimento automático quando disponível (ViaCEP).
+            </HelpHint>
+          </h4>
+          <div className="structuredFormSectionBody businessFormGrid">
+            <label className="full">
+              CEP
+              <Input
+                className="uiInput"
+                value={form.postal_code || ""}
+                onChange={(e) => onPostalCodeChange(e.target.value)}
+                placeholder="00000-000"
+                inputMode="numeric"
+                autoComplete="postal-code"
+              />
+            </label>
+            {cepFeedback ? (
+              <p
+                className={`full ${
+                  cepFeedback.includes("preenchido automaticamente")
+                    ? "feedbackOk"
+                    : "feedbackError"
+                }`}
+              >
+                {cepFeedback}
+              </p>
+            ) : null}
+            <label className="full">
+              Logradouro
+              <Input
+                className="uiInput"
+                value={form.address_line || ""}
+                onChange={(e) => setForm((f) => ({ ...f, address_line: e.target.value }))}
+                placeholder="Rua, avenida, etc."
+              />
+            </label>
+            <label>
+              Número
+              <Input
+                className="uiInput"
+                value={form.address_number || ""}
+                onChange={(e) => setForm((f) => ({ ...f, address_number: e.target.value }))}
+              />
+            </label>
+            <label>
+              Complemento
+              <Input
+                className="uiInput"
+                value={form.address_complement || ""}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, address_complement: e.target.value }))
+                }
+              />
+            </label>
+            <label>
+              Bairro
+              <Input
+                className="uiInput"
+                value={form.neighborhood || ""}
+                onChange={(e) => setForm((f) => ({ ...f, neighborhood: e.target.value }))}
+              />
+            </label>
+            <label>
+              Cidade
+              <Input
+                className="uiInput"
+                value={form.city || ""}
+                onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+              />
+            </label>
+            <label>
+              UF
+              <Input
+                className="uiInput"
+                value={form.state || ""}
+                onChange={(e) => setForm((f) => ({ ...f, state: e.target.value }))}
+                maxLength={2}
+              />
+            </label>
+          </div>
+        </section>
+      ) : null}
     </>
   );
 }

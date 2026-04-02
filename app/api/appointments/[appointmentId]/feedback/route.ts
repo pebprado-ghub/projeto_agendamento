@@ -48,20 +48,36 @@ export async function POST(request: NextRequest, { params }: Params) {
       .select("name, auto_feedback_enabled, google_reviews_enabled, google_reviews_url")
       .eq("id", body.businessId)
       .maybeSingle();
-    if (!business || business.auto_feedback_enabled === false) {
-      return NextResponse.json(
-        { error: "Feedback automatico desabilitado para este negocio." },
-        { status: 403 }
-      );
+    if (!business) {
+      return NextResponse.json({ error: "Empresa nao encontrada." }, { status: 404 });
     }
     const { data: appt } = await supabase
       .from("appointments")
-      .select("id, customer_name, customer_phone, status, feedback_sent_at")
+      .select("id, customer_name, customer_phone, status, feedback_sent_at, service_id")
       .eq("id", appointmentId)
       .eq("business_id", body.businessId)
       .maybeSingle();
     if (!appt) {
       return NextResponse.json({ error: "Agendamento nao encontrado." }, { status: 404 });
+    }
+    let autoFeedbackOk = business.auto_feedback_enabled !== false;
+    const aid = appt.service_id as string | null;
+    if (aid) {
+      const { data: svc } = await supabase
+        .from("services")
+        .select("auto_feedback_enabled")
+        .eq("id", aid)
+        .eq("business_id", body.businessId)
+        .maybeSingle();
+      if (svc) {
+        autoFeedbackOk = svc.auto_feedback_enabled !== false;
+      }
+    }
+    if (!autoFeedbackOk) {
+      return NextResponse.json(
+        { error: "Feedback automatico desabilitado para este servico." },
+        { status: 403 }
+      );
     }
     if (appt.feedback_sent_at) {
       return NextResponse.json({ message: "Feedback ja enviado anteriormente." });
