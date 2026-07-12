@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { formatSupabaseRouteError } from "@/lib/formatSupabaseRouteError";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { resolveScheduleIdForDate } from "@/lib/resolveBusinessHourSchedule";
 
@@ -296,6 +297,6 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (error) {
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+    return NextResponse.json({ error: formatSupabaseRouteError(error) }, { status: 500 });
   }
 }

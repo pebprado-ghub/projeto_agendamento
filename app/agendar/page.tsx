@@ -120,7 +120,7 @@ function AgendarQuickContent() {
   return (
     <div className="publicBookingPage">
       <header className="publicBookingHeader">
-        <h1 className="publicBookingTitle">Reserva rápida</h1>
+        <h1 className="publicBookingTitle gradientText">Reserva rápida</h1>
         <p className="helperText">
           Escolha o serviço, data e horário. O consentimento de marketing é opcional e registrado só
           se você marcar a opção abaixo (LGPD).

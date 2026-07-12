@@ -6,7 +6,17 @@ export function middleware(request: NextRequest) {
   const raw = request.cookies.get("session_role")?.value;
   const isAuthenticated = isAuthenticatedRole(raw);
 
-  const publicPaths = ["/login", "/api/auth/login", "/api/auth/me", "/api/auth/logout"];
+  const publicPaths = [
+    "/login",
+    "/api/auth/login",
+    "/api/auth/me",
+    "/api/auth/logout",
+    "/b",
+    "/agendar",
+    "/api/booking",
+    "/api/public",
+    "/api/checkin"
+  ];
   const isPublicPath = publicPaths.some((path) => pathname.startsWith(path));
 
   if (!isAuthenticated && !isPublicPath) {

@@ -11,6 +11,7 @@ import {
   CreditCard,
   DollarSign,
   FolderKanban,
+  Globe,
   LayoutDashboard,
   MessageSquare,
   Package,
@@ -40,6 +41,7 @@ import { DeveloperPlansAgGrid } from "@/components/admin/DeveloperPlansAgGrid";
 import { OwnerServicesAgGrid } from "@/components/admin/OwnerServicesAgGrid";
 import { MetricCard } from "@/components/admin/MetricCard";
 import { CustomersManager } from "@/components/client/CustomersManager";
+import { PublicSiteEditor } from "@/components/client/PublicSiteEditor";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1342,7 +1344,7 @@ export default function HomePage() {
     "overview" | "analytics" | "agenda" | "subscription"
   >("overview");
   const [clientSettingsArea, setClientSettingsArea] = useState<
-    "messages" | "services" | "hours" | "customers" | "finance"
+    "messages" | "services" | "hours" | "customers" | "finance" | "publicSite"
   >("messages");
   const [clientCalendarView, setClientCalendarView] = useState<"day" | "week" | "month">(
     "week"
@@ -6094,6 +6096,14 @@ export default function HomePage() {
               </button>
               <button
                 type="button"
+                className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "publicSite" ? " isActive" : ""}`}
+                onClick={() => { setClientMainArea("settings"); setClientSettingsArea("publicSite"); }}
+              >
+                <span className="modernSidebarIcon"><Globe size={16} /></span>
+                Site público
+              </button>
+              <button
+                type="button"
                 className={`modernSidebarItem${clientMainArea === "settings" && clientSettingsArea === "hours" ? " isActive" : ""}`}
                 onClick={() => { setClientMainArea("settings"); setClientSettingsArea("hours"); }}
               >
@@ -6143,6 +6153,8 @@ export default function HomePage() {
                       ? "Comunicação"
                       : clientSettingsArea === "services"
                         ? "Catálogo de serviços"
+                        : clientSettingsArea === "publicSite"
+                          ? "Site público"
                         : clientSettingsArea === "hours"
                           ? "Agenda de atendimento"
                           : clientSettingsArea === "customers"
@@ -6741,6 +6753,22 @@ export default function HomePage() {
                         onClick={() => setClientCalendarView("month")}
                       >
                         Mensal
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="gap-1.5"
+                        disabled={!selectedBusinessId}
+                        title={
+                          !selectedBusinessId
+                            ? "Selecione um negócio para registrar bloqueios"
+                            : "Férias, viagem ou pausa: bloqueia novos agendamentos no período"
+                        }
+                        onClick={() => setClosureModalOpen(true)}
+                      >
+                        <CalendarX size={15} aria-hidden />
+                        Bloquear agenda
                       </Button>
                     </div>
                     {showGoToToday ? (
@@ -8781,6 +8809,22 @@ export default function HomePage() {
                     </article>
                   </div>
                 ) : null}
+              </article>
+            ) : null}
+
+            {clientMainArea === "settings" && clientSettingsArea === "publicSite" ? (
+              <article className="card full">
+                <h2>Site público</h2>
+                {selectedBusinessId ? (
+                  <PublicSiteEditor
+                    businessId={selectedBusinessId}
+                    businessSlug={
+                      businesses.find((b) => b.id === selectedBusinessId)?.slug || ""
+                    }
+                  />
+                ) : (
+                  <p className="helperText">Selecione um negócio para editar o site público.</p>
+                )}
               </article>
             ) : null}
 

@@ -37,17 +37,17 @@ export default function LoginPage() {
 
   return (
     <main className="page">
-      <section className="card loginCard glassCard">
+      <section className="card loginCard">
         <div className="loginCardHeader">
           <h1 className="gradientText">Login</h1>
           <ThemeToggle />
         </div>
         <p className="helperText">
-          Entre com usuario e senha para acessar seu ambiente.
+          Entre com usuário e senha para acessar seu ambiente.
         </p>
         <form className="form" onSubmit={handleLogin}>
           <label>
-            Usuario
+            Usuário
             <input
               className="uiInput"
               value={username}
