@@ -1,3 +1,4 @@
+import { hasPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { sendWhatsappTextMessage } from "@/lib/whatsappSendText";
 
@@ -41,6 +42,7 @@ export async function notifyNextWaitlistForWindow(params: {
   }
 
   if (!waitlistOk) return;
+  if (!(await hasPlanFeature(supabase, params.businessId, "waitlist"))) return;
 
   const { data: appointments } = await supabase
     .from("appointments")

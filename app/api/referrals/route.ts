@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type ReferralBody = {
@@ -32,6 +33,10 @@ export async function POST(request: NextRequest) {
       );
     }
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, body.businessId, "offers_loyalty");
+    if (!gate.ok) return gate.response;
+
     const status = body.markAsConverted ? "rewarded" : "registered";
     const convertedAt = body.markAsConverted ? new Date().toISOString() : null;
     const { data, error } = await supabase

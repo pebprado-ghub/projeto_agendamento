@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { AdminPlanFeatureId } from "@/lib/adminPlanFeatures";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type CampaignEventBody = {
@@ -11,6 +13,11 @@ type CampaignEventBody = {
   happenedAt?: string;
   metadata?: Record<string, unknown>;
 };
+
+function featureForCampaignType(type: CampaignEventBody["campaignType"]): AdminPlanFeatureId {
+  if (type === "birthday") return "birthday_campaign";
+  return "remarketing_campaigns";
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,6 +35,14 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(
+      supabase,
+      body.businessId,
+      featureForCampaignType(body.campaignType)
+    );
+    if (!gate.ok) return gate.response;
+
     const { data, error } = await supabase
       .from("campaign_events")
       .insert({

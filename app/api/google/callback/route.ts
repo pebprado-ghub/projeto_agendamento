@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 function fromBase64Url(value: string) {
@@ -35,6 +36,13 @@ export async function GET(request: NextRequest) {
     if (!businessId) {
       return NextResponse.redirect(
         new URL("/?google=error&reason=invalid_state", request.url)
+      );
+    }
+
+    const supabaseEarly = getSupabaseAdmin();
+    if (!(await hasPlanFeature(supabaseEarly, businessId, "google_calendar"))) {
+      return NextResponse.redirect(
+        new URL("/?google=error&reason=plan_feature_required", request.url)
       );
     }
 

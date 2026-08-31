@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { formatSupabaseRouteError } from "@/lib/formatSupabaseRouteError";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { resolveScheduleIdForDate } from "@/lib/resolveBusinessHourSchedule";
 
@@ -55,6 +56,10 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, businessId, "analytics_reports");
+    if (!gate.ok) return gate.response;
+
     const { start, end } = monthBounds(month);
     const [year, monthNumber] = month.split("-").map(Number);
     const midMonthIso = `${month}-15`;

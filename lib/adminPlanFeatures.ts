@@ -24,7 +24,8 @@ export type AdminPlanFeatureId =
   | "google_reviews"
   | "offers_loyalty"
   | "automations_n8n"
-  | "multi_unit";
+  | "multi_unit"
+  | "public_site";
 
 export const ADMIN_PLAN_FEATURE_GROUPS: Array<{
   id: string;
@@ -162,6 +163,11 @@ export const ADMIN_PLAN_FEATURE_GROUPS: Array<{
         id: "automations_n8n",
         label: "Automações avançadas (n8n)",
         description: "Orquestração de eventos com plataforma externa."
+      },
+      {
+        id: "public_site",
+        label: "Site público (vitrine)",
+        description: "Página pública /b/[slug] com textos, hero, galeria e CTA de agendamento."
       }
     ]
   }
@@ -191,30 +197,25 @@ export function tierFeaturePreset(
     for (const id of ids) m[id] = true;
   };
 
+  // Plano Agendamento (free): só operação essencial de agenda.
   enable(
     "internal_calendar",
     "services_catalog",
     "business_hours",
-    "customers_crm",
-    "messages_whatsapp"
+    "customers_crm"
   );
 
   if (code === "pro") {
     enable(
       "google_calendar",
-      "analytics_reports",
-      "finance_payments",
+      "messages_whatsapp",
       "waitlist",
       "reminders",
       "attendance_confirmation",
-      "remarketing_campaigns",
-      "birthday_campaign",
-      "post_visit_feedback",
+      "public_site",
       "checkin_qr",
-      "auto_return",
       "one_click_reschedule",
-      "offers_loyalty",
-      "google_reviews"
+      "auto_return"
     );
   }
 

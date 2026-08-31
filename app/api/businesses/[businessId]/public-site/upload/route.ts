@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticatedRole } from "@/lib/authRoles";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = {
@@ -49,6 +50,9 @@ export async function POST(request: NextRequest, { params }: Params) {
     const objectPath = `${businessId}/site/${Date.now()}-${crypto.randomUUID()}.${ext}`;
     const bytes = new Uint8Array(await file.arrayBuffer());
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, businessId, "public_site");
+    if (!gate.ok) return gate.response;
 
     const { error: uploadError } = await supabase.storage
       .from(bucket)

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function GET(request: NextRequest) {
@@ -13,6 +14,9 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "analytics_reports");
+    if (!gate.ok) return gate.response;
+
     const month = new Date().getMonth() + 1;
     const [{ data: customers }, { data: appointments }, { data: payments }] = await Promise.all([
       supabase

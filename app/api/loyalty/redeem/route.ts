@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { discountCentsFromPoints, levelFromLifetimePoints } from "@/lib/loyalty";
+import { assertPlanFeature } from "@/lib/planAccess";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type RedeemBody = {
   businessId: string;
@@ -27,6 +28,10 @@ export async function POST(request: NextRequest) {
     }
     const normalizedPoints = Math.floor(points / 100) * 100;
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, body.businessId, "offers_loyalty");
+    if (!gate.ok) return gate.response;
+
     const { data: loyalty } = await supabase
       .from("customer_loyalty")
       .select("points_balance, lifetime_points, total_redeemed_points")

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type MessageTemplateInput = {
@@ -23,6 +24,9 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "messages_whatsapp");
+    if (!gate.ok) return gate.response;
+
     const { data, error } = await supabase
       .from("message_templates")
       .select("id, business_id, code, content, is_active")
@@ -78,6 +82,9 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, body.businessId, "messages_whatsapp");
+    if (!gate.ok) return gate.response;
+
     const { error } = await supabase
       .from("message_templates")
       .upsert(rows, { onConflict: "business_id,code" });

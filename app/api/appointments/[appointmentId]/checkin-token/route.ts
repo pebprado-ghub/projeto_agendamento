@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = { params: { appointmentId: string } };
@@ -14,6 +15,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       );
     }
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "checkin_qr");
+    if (!gate.ok) return gate.response;
+
     const { data: business } = await supabase
       .from("businesses")
       .select("checkin_qr_enabled")

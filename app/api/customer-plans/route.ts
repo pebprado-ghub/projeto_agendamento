@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type CreateCustomerPlanBody = {
@@ -25,6 +26,10 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, body.businessId, "offers_loyalty");
+    if (!gate.ok) return gate.response;
+
     const [{ data: customer }, { data: offer }] = await Promise.all([
       supabase
         .from("customers")

@@ -21,8 +21,8 @@ insert into subscription_plans (
   allows_multi_unit
 )
 values
-  ('free', 'Gratis', 0, 50, 1, false, false),
-  ('pro', 'Pro', 4900, null, null, true, false),
+  ('free', 'Agendamento', 0, 50, 1, false, false),
+  ('pro', 'Profissional', 4900, null, null, true, false),
   ('enterprise', 'Enterprise', 14900, null, null, true, true)
 on conflict (code) do update set
   name = excluded.name,

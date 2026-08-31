@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type OfferBody = {
@@ -52,6 +53,10 @@ export async function POST(request: NextRequest) {
       body.billingCycleDays == null ? null : Math.max(1, Math.floor(Number(body.billingCycleDays)));
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, body.businessId, "offers_loyalty");
+    if (!gate.ok) return gate.response;
+
     const { data, error } = await supabase
       .from("offer_plans")
       .insert({

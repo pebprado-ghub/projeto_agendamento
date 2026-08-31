@@ -19,6 +19,7 @@ export type DeveloperCatalogPlan = {
   professional_limit: number | null;
   allows_automations: boolean;
   allows_multi_unit: boolean;
+  feature_flags?: Record<string, boolean> | null;
 };
 
 type EditablePlan = {
@@ -33,7 +34,7 @@ type EditablePlan = {
 const PLAN_ORDER: PlanCode[] = ["free", "pro", "enterprise"];
 
 const BADGE_LABEL: Record<PlanCode, string> = {
-  free: "Essencial",
+  free: "Agendamento",
   pro: "Profissional",
   enterprise: "Enterprise"
 };
@@ -59,10 +60,23 @@ function centsToBrlInput(cents: number): string {
   }).format(cents / 100);
 }
 
+function parseMoneyToCents(input: string) {
+  const n = Number(input.replace(/\./g, "").replace(",", "."));
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
+}
+
 function seedFromCatalog(plans: DeveloperCatalogPlan[]): EditablePlan[] {
   return PLAN_ORDER.map((code) => {
     const api = plans.find((p) => p.code === code);
     const base = tierFeaturePreset(code);
+    if (api?.feature_flags) {
+      for (const key of Object.keys(base) as AdminPlanFeatureId[]) {
+        if (typeof api.feature_flags[key] === "boolean") {
+          base[key] = api.feature_flags[key];
+        }
+      }
+    }
     if (api) {
       base.automations_n8n = api.allows_automations;
       base.multi_unit = api.allows_multi_unit;
@@ -82,12 +96,16 @@ function seedFromCatalog(plans: DeveloperCatalogPlan[]): EditablePlan[] {
 }
 
 export function DeveloperSubscriptionPlanCards({
-  monetizationPlans
+  monetizationPlans,
+  onSaved
 }: {
   monetizationPlans: DeveloperCatalogPlan[];
+  onSaved?: () => Promise<void> | void;
 }) {
   const [drafts, setDrafts] = useState<EditablePlan[]>(() => seedFromCatalog(monetizationPlans));
   const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState("");
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(buildDefaultOpenGroups);
   /** Só um plano expandido por vez; os demais mostram só o cabeçalho. */
   const [expandedPlanCode, setExpandedPlanCode] = useState<PlanCode | null>("free");
@@ -114,6 +132,44 @@ export function DeveloperSubscriptionPlanCards({
   function handleReset() {
     setDrafts(seedFromCatalog(monetizationPlans));
     setDirty(false);
+    setSaveFeedback("");
+  }
+
+  async function handleSaveCatalog() {
+    setSaving(true);
+    setSaveFeedback("");
+    try {
+      for (const plan of drafts) {
+        const res = await fetch(`/api/monetization/plans/${encodeURIComponent(plan.code)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: plan.name.trim(),
+            monthly_price_cents: parseMoneyToCents(plan.priceInput || "0"),
+            monthly_appointment_limit: plan.appointmentLimit.trim()
+              ? Number(plan.appointmentLimit)
+              : null,
+            professional_limit: plan.professionalLimit.trim()
+              ? Number(plan.professionalLimit)
+              : null,
+            allows_automations: plan.features.automations_n8n === true,
+            allows_multi_unit: plan.features.multi_unit === true,
+            feature_flags: plan.features
+          })
+        });
+        const json = (await res.json()) as { error?: string };
+        if (!res.ok) {
+          throw new Error(json.error || `Falha ao salvar plano ${plan.code}.`);
+        }
+      }
+      setDirty(false);
+      setSaveFeedback("Catálogo de planos salvo com sucesso.");
+      await onSaved?.();
+    } catch (error) {
+      setSaveFeedback((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   /** Uma categoria aberta por plano; abrir outra fecha a anterior. Clicar na aberta recolhe. */
@@ -159,11 +215,25 @@ export function DeveloperSubscriptionPlanCards({
           publicados na API.
         </p>
         {dirty ? (
-          <Button type="button" variant="outline" size="sm" onClick={handleReset}>
+          <Button type="button" variant="outline" size="sm" onClick={handleReset} disabled={saving}>
             Restaurar catálogo
           </Button>
         ) : null}
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          disabled={!dirty || saving}
+          onClick={() => void handleSaveCatalog()}
+        >
+          {saving ? "Salvando…" : "Salvar catálogo"}
+        </Button>
       </div>
+      {saveFeedback ? (
+        <p className={saveFeedback.includes("sucesso") ? "feedbackOk" : "feedbackError"}>
+          {saveFeedback}
+        </p>
+      ) : null}
       <div className="developerPlanCardsGrid">
         {drafts.map((plan) => {
           const planExpanded = expandedPlanCode === plan.code;

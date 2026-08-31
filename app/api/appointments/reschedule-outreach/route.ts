@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { findNextAvailableSlotAfter } from "@/lib/findNextAvailableSlotAfter";
 import { sendWhatsappTextMessage } from "@/lib/whatsappSendText";
@@ -110,6 +111,8 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "one_click_reschedule");
+    if (!gate.ok) return gate.response;
 
     const { data: business } = await supabase
       .from("businesses")

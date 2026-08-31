@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { appointmentOverlapsBusinessClosure } from "@/lib/businessClosureOverlap";
+import { assertPlanFeature } from "@/lib/planAccess";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = { params: { appointmentId: string } };
 type Body = { businessId: string; daysAhead?: number };
@@ -16,6 +17,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       );
     }
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, body.businessId, "auto_return");
+    if (!gate.ok) return gate.response;
+
     const { data: business } = await supabase
       .from("businesses")
       .select("auto_return_enabled, auto_return_days")

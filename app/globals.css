@@ -5873,6 +5873,97 @@ html[data-theme="dark"] .publicBookingPick.isActive {
   color: var(--page-muted);
 }
 
+.planFeatureNotice {
+  margin: 12px 0 16px;
+  padding: 14px 16px;
+  border-radius: 0.5rem;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+
+.planFeatureNoticeTitle {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: #b91c1c;
+}
+
+.ownerPlanFeaturesList {
+  margin: 16px 0 20px;
+}
+
+.ownerPlanFeaturesGroups {
+  display: grid;
+  gap: 14px;
+  margin-top: 10px;
+}
+
+@media (min-width: 900px) {
+  .ownerPlanFeaturesGroups {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ownerPlanFeaturesGroup {
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+}
+
+.ownerPlanFeaturesGroupTitle {
+  margin: 0 0 8px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.ownerPlanFeaturesGroupCount {
+  font-weight: 500;
+  color: var(--page-muted);
+  font-size: 0.82rem;
+}
+
+.ownerPlanFeaturesItems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.ownerPlanFeaturesItem {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 0.84rem;
+}
+
+.ownerPlanFeaturesItem--off {
+  opacity: 0.55;
+}
+
+.ownerPlanFeaturesStatus {
+  flex: 0 0 auto;
+  width: 1.1rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+.ownerPlanFeaturesTexts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ownerPlanFeaturesLabel {
+  font-weight: 600;
+}
+
+.ownerPlanFeaturesDesc {
+  color: var(--page-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .publicSiteQuota--blocked {
   border-color: #fecaca;
   background: #fef2f2;

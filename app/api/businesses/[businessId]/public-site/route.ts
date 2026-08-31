@@ -6,6 +6,7 @@ import {
   publicSiteContentFingerprint,
   type PublicSiteEditLimits
 } from "@/lib/publicSiteEditLimits";
+import { assertPlanFeature, hasPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = {
@@ -87,6 +88,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     }
 
     const supabase = getSupabaseAdmin();
+    const planFeatureEnabled = await hasPlanFeature(supabase, businessId, "public_site");
     const { data, error } = await supabase
       .from("business_public_sites")
       .select(SELECT_FIELDS)
@@ -98,7 +100,7 @@ export async function GET(request: NextRequest, { params }: Params) {
     }
 
     const row = data || emptySite(businessId);
-    return NextResponse.json(withLimits(row));
+    return NextResponse.json({ ...withLimits(row), planFeatureEnabled });
   } catch (error) {
     return NextResponse.json(
       { error: (error as Error).message || "Erro ao carregar site publico." },
@@ -137,6 +139,10 @@ export async function PUT(request: NextRequest, { params }: Params) {
     };
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, businessId, "public_site");
+    if (!gate.ok) return gate.response;
+
     const { data: existing, error: loadError } = await supabase
       .from("business_public_sites")
       .select(SELECT_FIELDS)

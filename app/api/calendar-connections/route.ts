@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type UpsertCalendarConnectionInput = {
@@ -20,6 +21,9 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "google_calendar");
+    if (!gate.ok) return gate.response;
+
     const { data, error } = await supabase
       .from("calendar_connections")
       .select(
@@ -56,6 +60,9 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, body.businessId, "google_calendar");
+    if (!gate.ok) return gate.response;
+
     const payload = {
       business_id: body.businessId,
       provider: "google",

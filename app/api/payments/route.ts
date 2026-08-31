@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { levelFromLifetimePoints, pointsFromPayment } from "@/lib/loyalty";
 
@@ -34,6 +35,9 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, businessId, "finance_payments");
+    if (!gate.ok) return gate.response;
+
     let query = supabase
       .from("customer_payments")
       .select(SELECT_FIELDS)
@@ -92,6 +96,8 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, body.businessId, "finance_payments");
+    if (!gate.ok) return gate.response;
 
     const { data: cust } = await supabase
       .from("customers")

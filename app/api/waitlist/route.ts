@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type JoinWaitlistInput = {
@@ -26,6 +27,10 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, body.businessId, "waitlist");
+    if (!gate.ok) return gate.response;
+
     const { data: business } = await supabase
       .from("businesses")
       .select("waitlist_enabled")

@@ -7,6 +7,7 @@ import {
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { ensureCustomerForAppointment } from "@/lib/ensureCustomerForAppointment";
 import { appointmentOverlapsBusinessClosure } from "@/lib/businessClosureOverlap";
+import { hasPlanFeature } from "@/lib/planAccess";
 
 type CreateAppointmentInput = {
   businessId: string;
@@ -303,6 +304,9 @@ export async function POST(request: NextRequest) {
         return Math.max(latest, blockedUntil);
       }, startsAt.getTime());
       const nextEndAt = applyMinutes(new Date(nextStartAt), durationMinutes);
+      const waitlistOnPlan = waitlistEnabled
+        ? await hasPlanFeature(supabase, body.businessId, "waitlist")
+        : false;
       return NextResponse.json(
         {
           error:
@@ -313,7 +317,7 @@ export async function POST(request: NextRequest) {
             suggestedEndAt: toIso(nextEndAt),
             slotCapacity,
             overlappingCount,
-            waitlistEligible: waitlistEnabled
+            waitlistEligible: waitlistEnabled && waitlistOnPlan
           }
         },
         { status: 409 }

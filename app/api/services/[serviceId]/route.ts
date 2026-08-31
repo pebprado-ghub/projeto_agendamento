@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceServiceAutomationPatch } from "@/lib/planBusinessSettings";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type UpdateServiceInput = {
@@ -199,6 +200,23 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     }
 
     const supabase = getSupabaseAdmin();
+    const { data: existingService, error: loadError } = await supabase
+      .from("services")
+      .select("business_id")
+      .eq("id", serviceId)
+      .maybeSingle();
+
+    if (loadError || !existingService?.business_id) {
+      return NextResponse.json({ error: "Servico nao encontrado." }, { status: 404 });
+    }
+
+    const automationGate = await enforceServiceAutomationPatch(
+      supabase,
+      String(existingService.business_id),
+      body
+    );
+    if (!automationGate.ok) return automationGate.response;
+
     const { data, error } = await supabase
       .from("services")
       .update(updates)

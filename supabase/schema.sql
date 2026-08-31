@@ -599,6 +599,7 @@ create table if not exists subscription_plans (
   professional_limit int,
   allows_automations boolean not null default false,
   allows_multi_unit boolean not null default false,
+  feature_flags jsonb,
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -614,8 +615,8 @@ insert into subscription_plans (
   allows_multi_unit
 )
 values
-  ('free', 'Gratis', 0, 50, 1, false, false),
-  ('pro', 'Pro', 4900, null, null, true, false),
+  ('free', 'Agendamento', 0, 50, 1, false, false),
+  ('pro', 'Profissional', 4900, null, null, true, false),
   ('enterprise', 'Enterprise', 14900, null, null, true, true)
 on conflict (code) do update set
   name = excluded.name,

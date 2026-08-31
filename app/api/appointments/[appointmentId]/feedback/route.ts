@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type Params = { params: { appointmentId: string } };
@@ -43,6 +44,9 @@ export async function POST(request: NextRequest, { params }: Params) {
       );
     }
     const supabase = getSupabaseAdmin();
+    const gate = await assertPlanFeature(supabase, body.businessId, "post_visit_feedback");
+    if (!gate.ok) return gate.response;
+
     const { data: business } = await supabase
       .from("businesses")
       .select("name, auto_feedback_enabled, google_reviews_enabled, google_reviews_url")

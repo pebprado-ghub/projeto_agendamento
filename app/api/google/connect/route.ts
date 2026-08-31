@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { hasPlanFeature } from "@/lib/planAccess";
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 function toBase64Url(value: string) {
   return Buffer.from(value, "utf8")
@@ -29,6 +31,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       { error: "Parametro businessId e obrigatorio." },
       { status: 400 }
+    );
+  }
+
+  const supabase = getSupabaseAdmin();
+  if (!(await hasPlanFeature(supabase, businessId, "google_calendar"))) {
+    return NextResponse.json(
+      {
+        error: "Google Calendar nao esta incluido no plano atual.",
+        code: "PLAN_FEATURE_REQUIRED",
+        feature: "google_calendar"
+      },
+      { status: 403 }
     );
   }
 

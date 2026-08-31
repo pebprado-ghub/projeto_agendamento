@@ -38,10 +38,15 @@ import {
 } from "@/components/admin/DeveloperMetricTable";
 import { DeveloperCommunicationHub } from "@/components/admin/DeveloperCommunicationHub";
 import { DeveloperPlansAgGrid } from "@/components/admin/DeveloperPlansAgGrid";
+import { DeveloperSubscriptionPlanCards } from "@/components/admin/DeveloperSubscriptionPlanCards";
+import { OwnerPlanGatedArea } from "@/components/client/OwnerPlanGatedArea";
+import { OwnerPlanFeaturesList } from "@/components/client/OwnerPlanFeaturesList";
 import { OwnerServicesAgGrid } from "@/components/admin/OwnerServicesAgGrid";
 import { MetricCard } from "@/components/admin/MetricCard";
 import { CustomersManager } from "@/components/client/CustomersManager";
 import { PublicSiteEditor } from "@/components/client/PublicSiteEditor";
+import type { AdminPlanFeatureId } from "@/lib/adminPlanFeatures";
+import { OWNER_PANEL_AREA_FEATURE } from "@/lib/subscriptionTiers";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1395,6 +1400,12 @@ export default function HomePage() {
   const [planProfessionalLimit, setPlanProfessionalLimit] = useState("");
   const [planAutomationsEnabled, setPlanAutomationsEnabled] = useState(false);
   const [planMultiUnitEnabled, setPlanMultiUnitEnabled] = useState(false);
+  const [businessPlanFeatures, setBusinessPlanFeatures] = useState<Record<
+    AdminPlanFeatureId,
+    boolean
+  > | null>(null);
+  const [businessPlanFeaturesLoading, setBusinessPlanFeaturesLoading] = useState(false);
+  const [businessPlanCommercialName, setBusinessPlanCommercialName] = useState("Agendamento");
   const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const [requestedPlanCode, setRequestedPlanCode] = useState<string>("free");
   const [subscriptionRequestNote, setSubscriptionRequestNote] = useState("");
@@ -1917,6 +1928,50 @@ export default function HomePage() {
       throw new Error(result.error || "Erro ao carregar consumo do plano.");
     }
     setMonetizationUsage(result.data || null);
+  }
+
+  async function loadBusinessPlanFeatures(businessId: string) {
+    setBusinessPlanFeaturesLoading(true);
+    try {
+      const response = await fetch(
+        `/api/monetization/features?businessId=${encodeURIComponent(businessId)}`
+      );
+      const result = (await response.json()) as {
+        data?: {
+          features: Record<AdminPlanFeatureId, boolean>;
+          tier?: { commercialName?: string };
+          enabledCount?: number;
+        };
+        error?: string;
+      };
+      if (!response.ok || !result.data?.features) {
+        setBusinessPlanFeatures(null);
+        setBusinessPlanCommercialName("Agendamento");
+        return;
+      }
+      setBusinessPlanFeatures(result.data.features);
+      setBusinessPlanCommercialName(result.data.tier?.commercialName || "Agendamento");
+    } finally {
+      setBusinessPlanFeaturesLoading(false);
+    }
+  }
+
+  function clientHasPlanFeature(featureId: AdminPlanFeatureId): boolean {
+    if (!businessPlanFeatures) return false;
+    return businessPlanFeatures[featureId] === true;
+  }
+
+  function isOwnerPanelAreaLocked(
+    area: keyof typeof OWNER_PANEL_AREA_FEATURE
+  ): boolean {
+    const featureId = OWNER_PANEL_AREA_FEATURE[area];
+    if (!featureId) return false;
+    return !clientHasPlanFeature(featureId);
+  }
+
+  function goToOwnerSubscription() {
+    setClientMainArea("dashboard");
+    setClientDashboardArea("subscription");
   }
 
   async function loadAnalyticsReport(businessId: string, month: string) {
@@ -2564,6 +2619,18 @@ export default function HomePage() {
     developerDashboardCategory,
     subscriptionFeedbackStatusFilter,
   ]);
+
+  useEffect(() => {
+    if (role !== "owner") return;
+    if (!selectedBusinessId) {
+      setBusinessPlanFeatures(null);
+      setBusinessPlanFeaturesLoading(false);
+      return;
+    }
+    void loadBusinessPlanFeatures(selectedBusinessId).catch(() => {
+      setBusinessPlanFeatures(null);
+    });
+  }, [role, selectedBusinessId]);
 
   useEffect(() => {
     if (role !== "owner") return;
@@ -5596,6 +5663,27 @@ export default function HomePage() {
                   title="Planos de assinatura"
                   description="Defina preços, limites e recursos dos planos disponíveis para as empresas."
                 >
+                  <DeveloperSubscriptionPlanCards
+                    monetizationPlans={monetizationPlans.filter((p) =>
+                      ["free", "pro", "enterprise"].includes(p.code)
+                    ) as Array<{
+                      code: "free" | "pro" | "enterprise";
+                      name: string;
+                      monthly_price_cents: number;
+                      monthly_appointment_limit: number | null;
+                      professional_limit: number | null;
+                      allows_automations: boolean;
+                      allows_multi_unit: boolean;
+                      feature_flags?: Record<string, boolean> | null;
+                    }>}
+                    onSaved={async () => {
+                      await loadMonetizationPlans();
+                    }}
+                  />
+                  <p className="helperText" style={{ margin: "20px 0 12px" }}>
+                    Planos customizados (além de Agendamento, Profissional e Enterprise) podem ser
+                    criados na grade abaixo.
+                  </p>
                   <DeveloperPlansAgGrid
                     rowData={monetizationPlans}
                     onCreated={async () => {
@@ -6343,6 +6431,13 @@ export default function HomePage() {
                   </div>
                 ) : null}
                 {clientDashboardArea === "analytics" ? (
+                  <OwnerPlanGatedArea
+                    loading={businessPlanFeaturesLoading}
+                    locked={isOwnerPanelAreaLocked("analytics")}
+                    featureId="analytics_reports"
+                    planCommercialName={businessPlanCommercialName}
+                    onGoToSubscription={goToOwnerSubscription}
+                  >
                   <>
                 <div className="hoursRulesGrid">
                   <label>
@@ -6724,6 +6819,7 @@ export default function HomePage() {
                   </>
                 ) : null}
                   </>
+                  </OwnerPlanGatedArea>
                 ) : null}
                 {clientDashboardArea === "agenda" ? (
                   <>
@@ -7388,6 +7484,12 @@ export default function HomePage() {
                   Os planos disponíveis são cadastrados pelo desenvolvedor. Aqui o administrador
                   escolhe apenas entre os planos ativos publicados.
                 </p>
+                {businessPlanFeatures ? (
+                  <OwnerPlanFeaturesList
+                    features={businessPlanFeatures}
+                    commercialName={businessPlanCommercialName}
+                  />
+                ) : null}
                 {subscriptionRequestFeedback ? (
                   <p className="feedbackOk">{subscriptionRequestFeedback}</p>
                 ) : null}
@@ -7558,6 +7660,13 @@ export default function HomePage() {
             {clientMainArea === "settings" && clientSettingsArea === "messages" ? (
               <article className="card full">
                 <h2>Comunicação com clientes</h2>
+                <OwnerPlanGatedArea
+                  loading={businessPlanFeaturesLoading}
+                  locked={isOwnerPanelAreaLocked("messages")}
+                  featureId="messages_whatsapp"
+                  planCommercialName={businessPlanCommercialName}
+                  onGoToSubscription={goToOwnerSubscription}
+                >
                 <form className="form" onSubmit={handleSaveMessageTemplates}>
                   <div className="formGroup messageSection">
                     <div className="messageSectionHeader">
@@ -7913,6 +8022,7 @@ export default function HomePage() {
                     <p className="feedbackOk">{messageTemplateFeedback}</p>
                   ) : null}
                 </form>
+                </OwnerPlanGatedArea>
               </article>
             ) : null}
 
@@ -8815,6 +8925,13 @@ export default function HomePage() {
             {clientMainArea === "settings" && clientSettingsArea === "publicSite" ? (
               <article className="card full">
                 <h2>Site público</h2>
+                <OwnerPlanGatedArea
+                  loading={businessPlanFeaturesLoading}
+                  locked={isOwnerPanelAreaLocked("publicSite")}
+                  featureId="public_site"
+                  planCommercialName={businessPlanCommercialName}
+                  onGoToSubscription={goToOwnerSubscription}
+                >
                 {selectedBusinessId ? (
                   <PublicSiteEditor
                     businessId={selectedBusinessId}
@@ -8825,6 +8942,7 @@ export default function HomePage() {
                 ) : (
                   <p className="helperText">Selecione um negócio para editar o site público.</p>
                 )}
+                </OwnerPlanGatedArea>
               </article>
             ) : null}
 
@@ -9246,6 +9364,14 @@ export default function HomePage() {
             {clientMainArea === "settings" && clientSettingsArea === "finance" ? (
               <article className="card full">
                 <h2>Financeiro (clientes)</h2>
+                <OwnerPlanGatedArea
+                  loading={businessPlanFeaturesLoading}
+                  locked={isOwnerPanelAreaLocked("finance")}
+                  featureId="finance_payments"
+                  planCommercialName={businessPlanCommercialName}
+                  onGoToSubscription={goToOwnerSubscription}
+                >
+                <>
                 <p className="helperText">
                   Nesta área o administrador configura apenas fidelização dos clientes
                   (pacotes/assinaturas e cobrança recorrente).
@@ -9347,6 +9473,8 @@ export default function HomePage() {
                   <Button type="submit">Salvar pacote/plano</Button>
                 </form>
                 {offerFeedback ? <p className="feedbackOk">{offerFeedback}</p> : null}
+                </>
+                </OwnerPlanGatedArea>
               </article>
             ) : null}
 

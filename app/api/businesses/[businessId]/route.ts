@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceBusinessAutomationPlan } from "@/lib/planBusinessSettings";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type UpdateBusinessInput = {
@@ -294,12 +295,41 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         : currentBusiness?.multi_unit_enabled ?? planDefaults.multiUnitEnabled;
     const billingPeriodStart = body.billingPeriodStart ?? currentBusiness?.billing_period_start ?? null;
     const billingPeriodEnd = body.billingPeriodEnd ?? currentBusiness?.billing_period_end ?? null;
+
+    const automationGate = await enforceBusinessAutomationPlan(
+      supabase,
+      businessId,
+      body,
+      {
+        calendarMode,
+        waitlistEnabled,
+        reminder24hEnabled,
+        reminder2hEnabled,
+        reminder30mEnabled,
+        attendanceConfirmationRequired,
+        autoReleaseUnconfirmed,
+        postVisitThankYouEnabled,
+        postVisitCouponEnabled,
+        remarketingEnabled,
+        birthdayCampaignEnabled,
+        autoReturnEnabled,
+        oneClickRescheduleEnabled,
+        checkinQrEnabled,
+        autoFeedbackEnabled,
+        googleReviewsEnabled,
+        automationsEnabled,
+        multiUnitEnabled
+      }
+    );
+    if (!automationGate.ok) return automationGate.response;
+    const automation = automationGate.settings;
+
     const { data, error } = await supabase
       .from("businesses")
       .update({
         name,
         timezone: body.timezone?.trim() || "America/Sao_Paulo",
-        calendar_mode: calendarMode,
+        calendar_mode: automation.calendarMode,
         cnpj: cnpjDigits || null,
         legal_name: body.legalName?.trim() || null,
         trade_name: body.tradeName?.trim() || null,
@@ -324,31 +354,31 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         booking_reschedule_cutoff_minutes: bookingRescheduleCutoffMinutes,
         booking_cancel_cutoff_minutes: bookingCancelCutoffMinutes,
         booking_slot_capacity: bookingSlotCapacity,
-        waitlist_enabled: waitlistEnabled,
-        reminder_24h_enabled: reminder24hEnabled,
-        reminder_2h_enabled: reminder2hEnabled,
-        reminder_30m_enabled: reminder30mEnabled,
-        attendance_confirmation_required: attendanceConfirmationRequired,
+        waitlist_enabled: automation.waitlistEnabled,
+        reminder_24h_enabled: automation.reminder24hEnabled,
+        reminder_2h_enabled: automation.reminder2hEnabled,
+        reminder_30m_enabled: automation.reminder30mEnabled,
+        attendance_confirmation_required: automation.attendanceConfirmationRequired,
         attendance_confirmation_deadline_minutes: attendanceConfirmationDeadlineMinutes,
-        auto_release_unconfirmed: autoReleaseUnconfirmed,
-        post_visit_thank_you_enabled: postVisitThankYouEnabled,
-        post_visit_coupon_enabled: postVisitCouponEnabled,
-        remarketing_enabled: remarketingEnabled,
+        auto_release_unconfirmed: automation.autoReleaseUnconfirmed,
+        post_visit_thank_you_enabled: automation.postVisitThankYouEnabled,
+        post_visit_coupon_enabled: automation.postVisitCouponEnabled,
+        remarketing_enabled: automation.remarketingEnabled,
         remarketing_inactive_days: remarketingInactiveDays,
-        birthday_campaign_enabled: birthdayCampaignEnabled,
-        auto_return_enabled: autoReturnEnabled,
+        birthday_campaign_enabled: automation.birthdayCampaignEnabled,
+        auto_return_enabled: automation.autoReturnEnabled,
         auto_return_days: autoReturnDays,
-        one_click_reschedule_enabled: oneClickRescheduleEnabled,
-        checkin_qr_enabled: checkinQrEnabled,
-        auto_feedback_enabled: autoFeedbackEnabled,
-        google_reviews_enabled: googleReviewsEnabled,
+        one_click_reschedule_enabled: automation.oneClickRescheduleEnabled,
+        checkin_qr_enabled: automation.checkinQrEnabled,
+        auto_feedback_enabled: automation.autoFeedbackEnabled,
+        google_reviews_enabled: automation.googleReviewsEnabled,
         google_reviews_url: googleReviewsUrl,
         subscription_plan_code: subscriptionPlanCode,
         subscription_status: subscriptionStatus,
         monthly_appointment_limit: monthlyAppointmentLimit,
         professional_limit: professionalLimit,
-        automations_enabled: automationsEnabled,
-        multi_unit_enabled: multiUnitEnabled,
+        automations_enabled: automation.automationsEnabled,
+        multi_unit_enabled: automation.multiUnitEnabled,
         billing_period_start: billingPeriodStart,
         billing_period_end: billingPeriodEnd
       })

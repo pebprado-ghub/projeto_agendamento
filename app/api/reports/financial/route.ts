@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertPlanFeature } from "@/lib/planAccess";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 function monthBounds(month: string) {
@@ -27,6 +28,10 @@ export async function GET(request: NextRequest) {
     }
 
     const supabase = getSupabaseAdmin();
+
+    const gate = await assertPlanFeature(supabase, businessId, "finance_payments");
+    if (!gate.ok) return gate.response;
+
     const { start, end } = monthBounds(month);
     const prev = previousMonth(month);
     const { start: prevStart, end: prevEnd } = monthBounds(prev);

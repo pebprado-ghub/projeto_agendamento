@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enforceServiceAutomationPatch } from "@/lib/planBusinessSettings";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 type CreateServiceInput = {
@@ -200,6 +201,9 @@ export async function POST(request: NextRequest) {
     if (typeof body.autoFeedbackEnabled === "boolean") {
       row.auto_feedback_enabled = body.autoFeedbackEnabled;
     }
+
+    const automationGate = await enforceServiceAutomationPatch(supabase, body.businessId, body);
+    if (!automationGate.ok) return automationGate.response;
 
     const { data, error } = await supabase.from("services").insert(row).select(SERVICE_SELECT).single();
 

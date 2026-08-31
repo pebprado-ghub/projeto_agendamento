@@ -59,14 +59,16 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
   const [uploading, setUploading] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
+  const [planFeatureEnabled, setPlanFeatureEnabled] = useState(true);
 
   const publicUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}/b/${encodeURIComponent(businessSlug)}`
       : `/b/${businessSlug}`;
   const previewUrl = `${publicUrl}?preview=1`;
-  const canEdit = editLimits?.canEdit !== false;
-  const editBlocked = Boolean(editLimits && !editLimits.canEdit);
+  const planBlocked = planFeatureEnabled === false;
+  const canEdit = !planBlocked && editLimits?.canEdit !== false;
+  const editBlocked = planBlocked || Boolean(editLimits && !editLimits.canEdit);
 
   const load = useCallback(async () => {
     if (!businessId) return;
@@ -77,6 +79,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
       const json = (await res.json()) as {
         data?: PublicSiteForm;
         editLimits?: PublicSiteEditLimits;
+        planFeatureEnabled?: boolean;
         error?: string;
       };
       if (!res.ok || !json.data) {
@@ -84,6 +87,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
       }
       setForm(applyServerForm(json.data));
       if (json.editLimits) setEditLimits(json.editLimits);
+      setPlanFeatureEnabled(json.planFeatureEnabled !== false);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -131,7 +135,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
 
   async function handleHeroUpload(files: FileList | null) {
     const file = files?.[0];
-    if (!file) return;
+    if (!file || planBlocked) return;
     setUploading(true);
     setError("");
     try {
@@ -146,7 +150,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
   }
 
   async function handleGalleryUpload(files: FileList | null) {
-    if (!files?.length) return;
+    if (!files?.length || planBlocked) return;
     setUploading(true);
     setError("");
     try {
@@ -299,7 +303,14 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
         </p>
       ) : null}
 
-      {editBlocked && editLimits?.blockedReason ? (
+      {planBlocked ? (
+        <p className="feedbackError" role="alert">
+          O site público (vitrine) não está incluído no plano atual. Faça upgrade para editar ou
+          publicar a página /b/{businessSlug || "…"}.
+        </p>
+      ) : null}
+
+      {editLimits && !editLimits.canEdit && editLimits.blockedReason ? (
         <p className="feedbackError" role="alert">
           {editLimits.blockedReason}
         </p>
@@ -409,7 +420,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
         <Input
           type="file"
           accept="image/*"
-          disabled={uploading}
+          disabled={uploading || planBlocked}
           onChange={(e) => {
             void handleHeroUpload(e.target.files);
             e.target.value = "";
@@ -454,7 +465,7 @@ export function PublicSiteEditor({ businessId, businessSlug }: Props) {
           type="file"
           accept="image/*"
           multiple
-          disabled={uploading || form.galleryUrls.length >= 12}
+          disabled={uploading || planBlocked || form.galleryUrls.length >= 12}
           onChange={(e) => {
             void handleGalleryUpload(e.target.files);
             e.target.value = "";
